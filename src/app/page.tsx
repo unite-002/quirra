@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 
+/* eslint-disable @typescript-eslint/no-unused-vars */
+
 export default function Home() {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [input, setInput] = useState("");
