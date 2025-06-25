@@ -22,7 +22,7 @@ export async function POST(req: Request) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "mistral", // Your local Ollama model
+            model: "mistral",
             prompt,
             stream: false,
           }),
@@ -37,11 +37,31 @@ export async function POST(req: Request) {
         );
       }
     } else {
-      // Fallback for Vercel (no live Ollama access)
-      return NextResponse.json({
-        response:
-          "🧠 Quirra's brain is not online in production yet. Try it locally or wait for the cloud version to be ready.",
-      });
+      // 🌍 Cloud-based response using OpenRouter (or OpenAI)
+      try {
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, // 🔑 Add this in Vercel → Env Vars
+          },
+          body: JSON.stringify({
+            model: "openai/gpt-3.5-turbo", // ✅ or try another model
+            messages: [
+              { role: "system", content: "You are Quirra, a powerful AI assistant." },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+
+        const data = await response.json();
+        return NextResponse.json({ response: data.choices[0].message.content });
+      } catch {
+        return NextResponse.json(
+          { response: "⚠️ Quirra failed to connect to the cloud AI brain." },
+          { status: 500 }
+        );
+      }
     }
   } catch {
     return NextResponse.json(
