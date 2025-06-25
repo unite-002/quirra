@@ -7,14 +7,12 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
     if (!input.trim()) return;
 
     const userMessage = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
-    // Show temporary typing message
     setMessages((prev) => [
       ...prev,
       { role: "assistant", content: "⏳ Quirra is thinking..." },
@@ -35,7 +33,7 @@ export default function Home() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.response },
       ]);
-    } catch (err) {
+    } catch (_) {
       setMessages((prev) => [
         ...prev.slice(0, -1),
         { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
@@ -63,7 +61,6 @@ export default function Home() {
     const userMessage = { role: "user", content: `Use tool: ${type}` };
     setMessages((prev) => [...prev, userMessage]);
 
-    // Show loading
     setMessages((prev) => [
       ...prev,
       { role: "assistant", content: "⏳ Quirra is processing your tool request..." },
@@ -82,7 +79,7 @@ export default function Home() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.response },
       ]);
-    } catch (err) {
+    } catch (_) {
       setMessages((prev) => [
         ...prev.slice(0, -1),
         { role: "assistant", content: "⚠️ Tool failed to respond." },
@@ -93,7 +90,9 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-black via-blue-900 to-black text-white flex flex-col items-center justify-start p-4">
       <h1 className="text-4xl font-bold mb-2 text-white">Quirra Prototype</h1>
-      <p className="text-lg text-blue-200 text-center">Next generation of intelligence, built by vision.</p>
+      <p className="text-lg text-blue-200 text-center">
+        Next generation of intelligence, built by vision.
+      </p>
 
       {/* TOOL PANEL */}
       <div className="mt-6 flex gap-4 flex-wrap justify-center">
