@@ -1,38 +1,52 @@
+// src/app/api/ask/route.ts
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
-  const { prompt } = await req.json();
+  try {
+    const { prompt } = await req.json();
 
-  // Detect if it's running locally
-  const isLocal = process.env.NODE_ENV !== "production";
-
-  if (isLocal) {
-    try {
-      const response = await fetch("http://localhost:11434/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "mistral",
-          prompt,
-          stream: false,
-        }),
-      });
-
-      const data = await response.json();
-      return NextResponse.json({ response: data.response });
-    } catch (_) {
+    if (!prompt || typeof prompt !== "string") {
       return NextResponse.json(
-        { response: "⚠️ Local Quirra (Ollama) not responding." },
-        { status: 500 }
+        { response: "⚠️ Missing or invalid prompt." },
+        { status: 400 }
       );
     }
-  } else {
-    // Vercel fallback message
-    return NextResponse.json({
-      response:
-        "🧠 Quirra's live brain is not connected yet (Ollama runs locally only). Try the dev version on your PC!",
-    });
+
+    const isLocal = process.env.NODE_ENV !== "production";
+
+    if (isLocal) {
+      try {
+        const response = await fetch("http://localhost:11434/api/generate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "mistral", // Your local Ollama model
+            prompt,
+            stream: false,
+          }),
+        });
+
+        const data = await response.json();
+        return NextResponse.json({ response: data.response });
+      } catch {
+        return NextResponse.json(
+          { response: "⚠️ Local Quirra (Ollama) is not responding. Make sure it's running." },
+          { status: 500 }
+        );
+      }
+    } else {
+      // Fallback for Vercel (no live Ollama access)
+      return NextResponse.json({
+        response:
+          "🧠 Quirra's brain is not online in production yet. Try it locally or wait for the cloud version to be ready.",
+      });
+    }
+  } catch {
+    return NextResponse.json(
+      { response: "⚠️ Invalid request to Quirra. Please check your input." },
+      { status: 500 }
+    );
   }
 }
