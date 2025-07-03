@@ -32,14 +32,14 @@ export async function POST(req: Request) {
     const data = await response.json();
 
     // Log the full response for debugging
-    console.log("OpenAI API Response:", data);
+    console.log("OpenAI API Response:", JSON.stringify(data, null, 2));
 
-    // Check if the response has a message and choices
+    // Check for valid response and log it
     const message = data?.choices?.[0]?.message?.content;
 
     if (!message) {
-      // Log the error if no message is returned
-      console.error("Error: OpenAI API response has no message content.", JSON.stringify(data, null, 2));
+      // Log and handle the case where no valid message is returned
+      console.error("No valid message returned. Full response: ", JSON.stringify(data, null, 2));
       return NextResponse.json(
         { response: "⚠️ OpenAI responded but no message was returned." },
         { status: 502 }
