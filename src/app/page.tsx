@@ -1,156 +1,143 @@
 "use client";
-import { useState } from "react";
+import React, {
+  useState, useEffect, useRef, KeyboardEvent, FormEvent,
+} from "react";
 
-/* eslint-disable @typescript-eslint/no-unused-vars */
+interface Message {
+  role: "user" | "gpt" | "gemini";
+  content: string;
+}
 
 export default function Home() {
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [hIndex, setHIndex] = useState(-1);
+  const [loading, setLoading] = useState(false);
+  const [battle, setBattle] = useState(false);
+  const [theme, setTheme] = useState<"dark"|"light">("dark");
+  const [config, setConfig] = useState({
+    searchPrompt: "Search the web and summarize:",
+    imagePrompt: "Describe a futuristic AI scene:",
+    codePrompt: "Explain this code in simple terms:",
+    gptPrompt: "Helpful assistant:",
+    geminiPrompt: "Concise factual response:",
+    useStreaming: true,
+  });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
 
-    const userMessage = { role: "user", content: input };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "⏳ Quirra is thinking..." },
-    ]);
-
-    try {
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: `You are Quirra, an advanced AI assistant. Answer clearly and helpfully.\n\nUser: ${input}`,
-        }),
-      });
-
-      const data = await res.json();
-
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: data.response },
-      ]);
-    } catch (_) {
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
-      ]);
+  const recallHistory = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowUp" && history.length) {
+      const ni = Math.min(hIndex + 1, history.length - 1);
+      setHIndex(ni);
+      setInput(history[history.length - 1 - ni]);
+    }
+    if (e.key === "ArrowDown") {
+      const ni = Math.max(hIndex - 1, -1);
+      setHIndex(ni);
+      setInput(ni >= 0 ? history[history.length - 1 - ni] : "");
     }
   };
 
-  const handleTool = async (type: string) => {
-    let toolPrompt = "";
-
-    switch (type) {
-      case "search":
-        toolPrompt = "Search the web and summarize: What are the latest trends in AI?";
-        break;
-      case "image":
-        toolPrompt = "Describe an image of the future of AI — futuristic, powerful, beautiful.";
-        break;
-      case "code":
-        toolPrompt = "Explain this Python code in simple terms:\n\nfor i in range(5): print(i)";
-        break;
-      default:
-        return;
-    }
-
-    const userMessage = { role: "user", content: `Use tool: ${type}` };
-    setMessages((prev) => [...prev, userMessage]);
-
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "⏳ Quirra is processing your tool request..." },
-    ]);
-
-    try {
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: toolPrompt }),
+  const sendStream = (prompt: string, role: Message["role"]) => {
+    setMessages((m) => [...m, { role, content: "" }]);
+    const src = new EventSource("/api/stream?prompt=" + encodeURIComponent(prompt) + `&role=${role}`);
+    src.onmessage = (e) => {
+      if (e.data === "[DONE]") { src.close(); setLoading(false); return; }
+      setMessages((m) => {
+        const last = [...m].reverse().findIndex(x => x.role === role);
+        if (last === -1) return m;
+        const idx = m.length - 1 - last;
+        const cp = [...m];
+        cp[idx].content += e.data;
+        return cp;
       });
+    };
+    src.onerror = () => { src.close(); setLoading(false); };
+  };
 
-      const data = await res.json();
+  const handleTool = (type: "search"|"image"|"code") => {
+    const toolPrompt = {
+      search: config.searchPrompt,
+      image: config.imagePrompt,
+      code: config.codePrompt,
+    }[type] + "\nUser: " + input;
+    setLoading(true);
+    sendStream(toolPrompt, "gpt");
+  };
 
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: data.response },
-      ]);
-    } catch (_) {
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: "⚠️ Tool failed to respond." },
-      ]);
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!input.trim()) return;
+    setLoading(true);
+    setHistory(h => [...h, input]);
+    setHIndex(-1);
+    const userInput = input;
+    setInput("");
+
+    const gptP = `${config.gptPrompt}\nUser: ${userInput}`;
+    if (battle) {
+      const gemP = `${config.geminiPrompt}\nUser: ${userInput}`;
+      sendStream(gptP, "gpt");
+      sendStream(gemP, "gemini");
+    } else {
+      sendStream(gptP, "gpt");
     }
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-black via-blue-900 to-black text-white flex flex-col items-center justify-start p-4">
-      <h1 className="text-4xl font-bold mb-2 text-white">Quirra Prototype</h1>
-      <p className="text-lg text-blue-200 text-center">
-        Next generation of intelligence, built by vision.
-      </p>
-
-      {/* TOOL PANEL */}
-      <div className="mt-6 flex gap-4 flex-wrap justify-center">
-        <button
-          onClick={() => handleTool("search")}
-          className="px-4 py-2 bg-purple-700 hover:bg-purple-800 rounded-lg text-white"
-        >
-          🕸️ Search
-        </button>
-        <button
-          onClick={() => handleTool("image")}
-          className="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded-lg text-white"
-        >
-          🎨 Image Generator
-        </button>
-        <button
-          onClick={() => handleTool("code")}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-lg text-white"
-        >
-          🧠 Code Helper
-        </button>
-      </div>
-
-      {/* CHAT WINDOW */}
-      <div className="mt-6 w-full max-w-2xl bg-black border border-blue-800 rounded-2xl p-6 shadow-lg">
-        <div className="h-96 overflow-y-auto flex flex-col space-y-2">
-          {messages.map((msg, index) => (
-            <div
-              key={index}
-              className={`p-3 rounded-xl max-w-[75%] ${
-                msg.role === "user"
-                  ? "bg-blue-700 self-end text-white text-right"
-                  : "bg-gray-800 self-start text-green-300 text-left"
-              }`}
-            >
-              <span>{msg.content}</span>
-            </div>
-          ))}
+    <main className={`min-h-screen px-4 py-8 ${theme==="dark"?"bg-gradient-to-b from-[#000011] to-[#001133]":"bg-white text-black"}`}>
+      <header className="flex justify-between items-center max-w-2xl mx-auto mb-6">
+        <h1 className="text-5xl font-bold" style={{ color: theme === "dark" ? "#00ccff" : "#003366" }}>Quirra 💎</h1>
+        <div className="space-x-2">
+          <button onClick={()=>setTheme(t=>t==="dark"?"light":"dark")} className="btn">🌙/☀️</button>
+          <button onClick={()=>setBattle(b=>!b)} className="btn">{battle?"Solo":"Battle"}</button>
         </div>
+      </header>
 
-        <form onSubmit={handleSubmit} className="mt-4 flex gap-2">
-          <input
-            type="text"
-            placeholder="Ask Quirra something..."
-            className="flex-1 p-3 rounded-lg bg-gray-800 text-white border border-blue-700 focus:outline-none"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+      <div className="config-panel max-w-2xl mx-auto mb-6 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        {["gptPrompt","geminiPrompt","searchPrompt","imagePrompt","codePrompt"].map(k => (
+          <textarea
+            key={k}
+            value={(config as any)[k]}
+            onChange={e=>setConfig(c=>({...c, [k]:e.target.value}))}
+            className="p-2 border rounded"
+            rows={2}
+            placeholder={k}
           />
-          <button
-            type="submit"
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white"
-          >
-            Send
-          </button>
-        </form>
+        ))}
       </div>
+
+      <div className="max-w-2xl mx-auto bg-[#00001a] border border-[#003366] rounded-lg h-[400px] overflow-y-auto p-4 space-y-3">
+        {messages.map((m,i)=>(
+          <div key={i} className={`p-3 rounded-lg max-w-[75%] ${m.role==="user"?"bg-[#001133] self-end text-right":"bg-[#003344] self-start"} ${m.role==="gpt"?"text-[#00ccff]":m.role==="gemini"?"text-[#ffcc00]":"text-white"} mx-auto`}>
+            {battle && m.role!=="user" && <strong className="block">{m.role.toUpperCase()}:</strong>}
+            {m.content || (loading ? <TypingDots /> : "")}
+          </div>
+        ))}
+        <div ref={endRef} />
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex max-w-2xl mx-auto mt-4 gap-2">
+        <input
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={recallHistory}
+          disabled={loading}
+          className="flex-1 px-4 py-2 rounded border bg-[#000030] border-[#004477] text-white"
+          placeholder="Ask Quirra..."
+        />
+        <button type="button" onClick={()=>handleTool("search")} className="btn">Search</button>
+        <button type="button" onClick={()=>handleTool("image")} className="btn">Image</button>
+        <button type="button" onClick={()=>handleTool("code")} className="btn">Code</button>
+        <button type="submit" disabled={loading} className="btn">{loading?"...":"Send"}</button>
+      </form>
     </main>
   );
+}
+
+function TypingDots() {
+  return <span className="inline-flex space-x-1"><span className="animate-bounce">.</span><span className="animate-bounce delay-200">.</span><span className="animate-bounce delay-400">.</span></span>;
 }
