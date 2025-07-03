@@ -5,10 +5,12 @@ export async function POST(req: Request) {
   try {
     const { prompt } = await req.json();
 
+    // Validate prompt
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json({ response: "⚠️ Missing or invalid prompt." }, { status: 400 });
     }
 
+    // Call OpenAI API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -26,8 +28,10 @@ export async function POST(req: Request) {
       }),
     });
 
+    // Parse OpenAI response
     const data = await response.json();
 
+    // Check for valid response
     if (!data || !data.choices || !data.choices[0]?.message?.content) {
       return NextResponse.json(
         { response: "⚠️ OpenAI responded but no message was returned." },
@@ -35,8 +39,12 @@ export async function POST(req: Request) {
       );
     }
 
+    // Return the response message
     return NextResponse.json({ response: data.choices[0].message.content });
-  } catch (_) {
+  } catch (err) {
+    // Log the error for better debugging (optional)
+    console.error("Error connecting to OpenAI:", err);
+
     return NextResponse.json(
       { response: "⚠️ Quirra failed to connect to OpenAI's brain." },
       { status: 500 }
