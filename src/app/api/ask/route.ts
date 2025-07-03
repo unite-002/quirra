@@ -31,8 +31,15 @@ export async function POST(req: Request) {
     // Parse OpenAI response
     const data = await response.json();
 
-    // Check for valid response
-    if (!data || !data.choices || !data.choices[0]?.message?.content) {
+    // Log the full response for debugging
+    console.log("OpenAI API Response:", data);
+
+    // Check if the response has a message and choices
+    const message = data?.choices?.[0]?.message?.content;
+
+    if (!message) {
+      // Log the error if no message is returned
+      console.error("Error: OpenAI API response has no message content.", JSON.stringify(data, null, 2));
       return NextResponse.json(
         { response: "⚠️ OpenAI responded but no message was returned." },
         { status: 502 }
@@ -40,9 +47,9 @@ export async function POST(req: Request) {
     }
 
     // Return the response message
-    return NextResponse.json({ response: data.choices[0].message.content });
+    return NextResponse.json({ response: message });
   } catch (err) {
-    // Log the error for better debugging (optional)
+    // Log the error for better debugging
     console.error("Error connecting to OpenAI:", err);
 
     return NextResponse.json(
