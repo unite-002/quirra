@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true, // Ensures that the app is minified for better performance
+  // Removed swcMinify as it's no longer valid
 };
 
 module.exports = nextConfig;
