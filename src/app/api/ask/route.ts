@@ -5,55 +5,34 @@ export async function POST(req: Request) {
   try {
     const { prompt } = await req.json();
 
-    // Validate prompt
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json({ response: "⚠️ Missing or invalid prompt." }, { status: 400 });
     }
 
-    // Call OpenAI API
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    // Call Hugging Face API
+    const response = await fetch("https://api-inference.huggingface.co/models/gpt2", {
       method: "POST",
       headers: {
+        "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: "gpt-3.5-turbo",
-        messages: [
-          { role: "system", content: "You are Quirra, a powerful AI assistant built to help users with intelligence, clarity, and vision." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 500,
-      }),
+      body: JSON.stringify({ inputs: prompt }),
     });
 
-    // Parse OpenAI response
     const data = await response.json();
 
-    // Log the full response for debugging
-    console.log("OpenAI API Response:", JSON.stringify(data, null, 2));
-
-    // Check for valid response and log it
-    const message = data?.choices?.[0]?.message?.content;
-
-    if (!message) {
-      // Log and handle the case where no valid message is returned
-      console.error("No valid message returned. Full response: ", JSON.stringify(data, null, 2));
+    // Handle Hugging Face response
+    if (!data || !data.generated_text) {
       return NextResponse.json(
-        { response: "⚠️ OpenAI responded but no message was returned." },
+        { response: "⚠️ Hugging Face responded but no message was returned." },
         { status: 502 }
       );
     }
 
-    // Return the response message
-    return NextResponse.json({ response: message });
-  } catch (err) {
-    // Log the error for better debugging
-    console.error("Error connecting to OpenAI:", err);
-
+    return NextResponse.json({ response: data.generated_text });
+  } catch (_) {
     return NextResponse.json(
-      { response: "⚠️ Quirra failed to connect to OpenAI's brain." },
+      { response: "⚠️ Quirra failed to connect to Hugging Face's brain." },
       { status: 500 }
     );
   }
