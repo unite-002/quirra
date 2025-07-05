@@ -1,14 +1,11 @@
 "use client";
 import { useState } from "react";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 export default function Home() {
-  // Explicitly typing input as string
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
-  const [input, setInput] = useState<string>("");  // Explicitly typed as string
+  const [input, setInput] = useState<string>("");
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => { // Explicitly typed as React.FormEvent
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!input.trim()) return;
 
@@ -36,7 +33,8 @@ export default function Home() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.response },
       ]);
-    } catch (_) {
+    } catch (err) {
+      console.error("Error:", err); // Log the error for debugging (optional)
       setMessages((prev) => [
         ...prev.slice(0, -1),
         { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
@@ -44,8 +42,8 @@ export default function Home() {
     }
   };
 
-  const handleTool = async (type: string) => { // Explicitly typed as string
-    let toolPrompt: string = ""; // Explicitly typed as string
+  const handleTool = async (type: string) => {
+    let toolPrompt: string = "";
 
     switch (type) {
       case "search":
@@ -82,7 +80,8 @@ export default function Home() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.response },
       ]);
-    } catch (_) {
+    } catch (err) {
+      console.error("Error:", err); // Log the error for debugging (optional)
       setMessages((prev) => [
         ...prev.slice(0, -1),
         { role: "assistant", content: "⚠️ Tool failed to respond." },

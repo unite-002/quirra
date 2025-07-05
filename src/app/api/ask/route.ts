@@ -30,7 +30,8 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ response: data.generated_text });
-  } catch (_) {
+  } catch (err) {
+    console.error("Error:", err); // Log the error for debugging (optional)
     return NextResponse.json(
       { response: "⚠️ Quirra failed to connect to Hugging Face's brain." },
       { status: 500 }
