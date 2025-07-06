@@ -6,14 +6,13 @@ export async function POST(req: Request) {
     const { prompt } = await req.json();
 
     if (!prompt || typeof prompt !== "string") {
-      return NextResponse.json({ response: "⚠️ Missing or invalid prompt." }, { status: 400 });
+      return NextResponse.json({ response: "⚠️ Invalid prompt." }, { status: 400 });
     }
 
-    // Call Hugging Face API
-    const response = await fetch("https://api-inference.huggingface.co/models/gpt2", {
+    const response = await fetch("https://api-inference.huggingface.co/models/tiiuae/falcon-rw-1b", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+        Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ inputs: prompt }),
@@ -21,20 +20,13 @@ export async function POST(req: Request) {
 
     const data = await response.json();
 
-    // Handle Hugging Face response
-    if (!data || !data.generated_text) {
-      return NextResponse.json(
-        { response: "⚠️ Hugging Face responded but no message was returned." },
-        { status: 502 }
-      );
-    }
+    const text = Array.isArray(data) && data[0]?.generated_text
+      ? data[0].generated_text
+      : "⚠️ Hugging Face returned no output.";
 
-    return NextResponse.json({ response: data.generated_text });
-  } catch (err) {
-    console.error("Error:", err); // Log the error for debugging (optional)
-    return NextResponse.json(
-      { response: "⚠️ Quirra failed to connect to Hugging Face's brain." },
-      { status: 500 }
-    );
+    return NextResponse.json({ response: text });
+  } catch (error) {
+    console.error("HF API error:", error);
+    return NextResponse.json({ response: "⚠️ Failed to connect to Hugging Face." }, { status: 500 });
   }
 }
