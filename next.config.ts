@@ -1,7 +1,9 @@
+// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
-  // Removed swcMinify as it's no longer valid
+  experimental: {
+    turbo: false, // disable Turbopack
+  },
 };
 
 module.exports = nextConfig;

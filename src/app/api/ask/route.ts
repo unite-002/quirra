@@ -2,31 +2,27 @@
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
-  try {
-    const { prompt } = await req.json();
+  const { prompt } = await req.json();
 
-    if (!prompt || typeof prompt !== "string") {
-      return NextResponse.json({ response: "⚠️ Invalid prompt." }, { status: 400 });
-    }
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://quirra.vercel.app", // your production domain or localhost
+      "X-Title": "Quirra Prototype",
+    },
+    body: JSON.stringify({
+      model: "mistralai/mistral-7b-instruct", // You can also try: openchat/openchat-7b, meta-llama, etc.
+      messages: [
+        { role: "system", content: "You are Quirra, an advanced assistant AI. Be clear, helpful, and visionary." },
+        { role: "user", content: prompt }
+      ],
+    }),
+  });
 
-    const response = await fetch("https://api-inference.huggingface.co/models/tiiuae/falcon-rw-1b", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ inputs: prompt }),
-    });
+  const data = await response.json();
+  const reply = data.choices?.[0]?.message?.content || "⚠️ No response from Quirra";
 
-    const data = await response.json();
-
-    const text = Array.isArray(data) && data[0]?.generated_text
-      ? data[0].generated_text
-      : "⚠️ Hugging Face returned no output.";
-
-    return NextResponse.json({ response: text });
-  } catch (error) {
-    console.error("HF API error:", error);
-    return NextResponse.json({ response: "⚠️ Failed to connect to Hugging Face." }, { status: 500 });
-  }
+  return NextResponse.json({ response: reply });
 }
