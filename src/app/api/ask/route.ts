@@ -3,26 +3,65 @@ import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   const { prompt } = await req.json();
+  const apiKey = process.env.OPENROUTER_API_KEY;
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://quirra.vercel.app", // your production domain or localhost
-      "X-Title": "Quirra Prototype",
-    },
-    body: JSON.stringify({
-      model: "mistralai/mistral-7b-instruct", // You can also try: openchat/openchat-7b, meta-llama, etc.
-      messages: [
-        { role: "system", content: "You are Quirra, an advanced assistant AI. Be clear, helpful, and visionary." },
-        { role: "user", content: prompt }
-      ],
-    }),
-  });
+  if (!apiKey) {
+    console.error("❌ Missing OpenRouter API key.");
+    return NextResponse.json(
+      { response: "⚠️ Quirra is not connected to her brain. API key missing." },
+      { status: 500 }
+    );
+  }
 
-  const data = await response.json();
-  const reply = data.choices?.[0]?.message?.content || "⚠️ No response from Quirra";
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://quirra.vercel.app", // Change this if your domain is different
+        "X-Title": "Quirra",
+      },
+      body: JSON.stringify({
+        model: "mistralai/mistral-7b-instruct:free",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are Quirra, an advanced AI assistant created to empower people, reason deeply, and help with any question.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      }),
+    });
 
-  return NextResponse.json({ response: reply });
+    const data = await response.json();
+
+    if (data.error) {
+      console.error("❌ OpenRouter API error:", data.error);
+      return NextResponse.json(
+        { response: `⚠️ OpenRouter Error: ${data.error.message}` },
+        { status: 500 }
+      );
+    }
+
+    if (!data.choices || !data.choices[0]?.message?.content) {
+      console.error("⚠️ No valid response from model:", data);
+      return NextResponse.json(
+        { response: "⚠️ No valid response from Quirra's brain." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ response: data.choices[0].message.content });
+  } catch (error) {
+    console.error("❌ Network or fetch error:", error);
+    return NextResponse.json(
+      { response: "⚠️ Network error. Quirra couldn't reach OpenRouter." },
+      { status: 500 }
+    );
+  }
 }
