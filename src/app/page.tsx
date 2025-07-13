@@ -1,11 +1,21 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+
+type SpeechRecognitionEvent = Event & {
+  results: SpeechRecognitionResultList;
+};
 
 export default function Home() {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
-  const [input, setInput] = useState<string>("");
+  const [input, setInput] = useState("");
+  const [listening, setListening] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
@@ -13,18 +23,13 @@ export default function Home() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "⏳ Quirra is thinking..." },
-    ]);
+    setMessages((prev) => [...prev, { role: "assistant", content: "▍" }]);
 
     try {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: `You are Quirra, an advanced AI assistant. Answer clearly and helpfully.\n\nUser: ${input}`,
-        }),
+        body: JSON.stringify({ prompt: input }),
       });
 
       const data = await res.json();
@@ -33,124 +38,104 @@ export default function Home() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.response },
       ]);
-    } catch (err) {
-      console.error("Error:", err); // Log the error for debugging (optional)
+    } catch (_) {
       setMessages((prev) => [
         ...prev.slice(0, -1),
-        { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
+        {
+          role: "assistant",
+          content: "⚠️ Failed to connect to Quirra's brain.",
+        },
       ]);
     }
   };
 
-  const handleTool = async (type: string) => {
-    let toolPrompt: string = "";
-
-    switch (type) {
-      case "search":
-        toolPrompt = "Search the web and summarize: What are the latest trends in AI?";
-        break;
-      case "image":
-        toolPrompt = "Describe an image of the future of AI — futuristic, powerful, beautiful.";
-        break;
-      case "code":
-        toolPrompt = "Explain this Python code in simple terms:\n\nfor i in range(5): print(i)";
-        break;
-      default:
-        return;
+  const handleVoiceInput = () => {
+    if (!("webkitSpeechRecognition" in window)) {
+      alert("Speech recognition not supported in this browser.");
+      return;
     }
 
-    const userMessage = { role: "user", content: `Use tool: ${type}` };
-    setMessages((prev) => [...prev, userMessage]);
+    const recognition = new (window as any).webkitSpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
 
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "⏳ Quirra is processing your tool request..." },
-    ]);
+    recognition.onstart = () => setListening(true);
+    recognition.onend = () => setListening(false);
 
-    try {
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: toolPrompt }),
-      });
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+    };
 
-      const data = await res.json();
+    recognition.onerror = (event: any) => {
+      console.error("Speech recognition error:", event);
+      setListening(false);
+    };
 
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: data.response },
-      ]);
-    } catch (err) {
-      console.error("Error:", err); // Log the error for debugging (optional)
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: "⚠️ Tool failed to respond." },
-      ]);
-    }
+    recognition.start();
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-black via-blue-900 to-black text-white flex flex-col items-center justify-start p-4">
-      <h1 className="text-4xl font-bold mb-2 text-white">Quirra</h1>
-      <p className="text-lg text-blue-200 text-center">
-        Next generation of intelligence, built by vision.
-      </p>
+    <main className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-white flex flex-col">
+      <header className="text-center p-6 border-b border-gray-800">
+        <h1 className="text-4xl font-bold text-white">Quirra AI</h1>
+      </header>
 
-      {/* TOOL PANEL */}
-      <div className="mt-6 flex gap-4 flex-wrap justify-center">
-        <button
-          onClick={() => handleTool("search")}
-          className="px-4 py-2 bg-purple-700 hover:bg-purple-800 rounded-lg text-white"
-        >
-          🕸️ Search
-        </button>
-        <button
-          onClick={() => handleTool("image")}
-          className="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded-lg text-white"
-        >
-          🎨 Image Generator
-        </button>
-        <button
-          onClick={() => handleTool("code")}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-lg text-white"
-        >
-          🧠 Code Helper
-        </button>
-      </div>
-
-      {/* CHAT WINDOW */}
-      <div className="mt-6 w-full max-w-2xl bg-black border border-blue-800 rounded-2xl p-6 shadow-lg">
-        <div className="h-96 overflow-y-auto flex flex-col space-y-2">
-          {messages.map((msg, index) => (
-            <div
-              key={index}
-              className={`p-3 rounded-xl max-w-[75%] ${
-                msg.role === "user"
-                  ? "bg-blue-700 self-end text-white text-right"
-                  : "bg-gray-800 self-start text-green-300 text-left"
-              }`}
-            >
-              <span>{msg.content}</span>
-            </div>
-          ))}
+      <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full">
+        <div className="flex flex-col gap-4">
+          {messages.map((msg, idx) =>
+            msg.content === "▍" ? (
+              <div
+                key={idx}
+                className="rounded-2xl px-4 py-3 max-w-[80%] self-start text-white text-left bg-gray-900 border border-blue-800 shadow-md animate-pulse"
+              >
+                ▍
+              </div>
+            ) : (
+              <div
+                key={idx}
+                className={`rounded-2xl px-4 py-3 max-w-[80%] whitespace-pre-line leading-relaxed tracking-wide text-base ${
+                  msg.role === "user"
+                    ? "bg-blue-600 text-white self-end text-right"
+                    : "bg-gray-900 text-white self-start text-left shadow-md border border-blue-800"
+                }`}
+              >
+                {msg.content}
+              </div>
+            )
+          )}
+          <div ref={messagesEndRef} />
         </div>
-
-        <form onSubmit={handleSubmit} className="mt-4 flex gap-2">
-          <input
-            type="text"
-            placeholder="Ask Quirra something..."
-            className="flex-1 p-3 rounded-lg bg-gray-800 text-white border border-blue-700 focus:outline-none"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-          <button
-            type="submit"
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white"
-          >
-            Send
-          </button>
-        </form>
       </div>
+
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-4xl mx-auto p-4 flex gap-2 bg-black border-t border-gray-800"
+      >
+        <input
+          type="text"
+          placeholder="Ask Quirra anything..."
+          className="flex-1 p-3 rounded-lg bg-gray-800 text-white border border-blue-600 focus:outline-none"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <button
+          type="submit"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-semibold"
+        >
+          Send
+        </button>
+        <button
+          type="button"
+          onClick={handleVoiceInput}
+          className={`px-4 py-2 rounded-lg font-semibold ${
+            listening ? "bg-green-600" : "bg-gray-700 hover:bg-gray-600"
+          } text-white`}
+        >
+          🎤
+        </button>
+      </form>
     </main>
   );
 }
