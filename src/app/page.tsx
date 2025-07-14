@@ -69,7 +69,6 @@ export default function Home() {
       <header className="text-center p-6 border-b border-gray-800">
         <h1 className="text-4xl font-bold text-white">Quirra AI</h1>
         <p className="text-gray-400 text-sm mt-1">
-          Next generation of intelligence, built by vision.
         </p>
       </header>
 
