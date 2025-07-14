@@ -63,12 +63,17 @@ export default function Home() {
   };
 
   const handleVoiceInput = () => {
-    if (typeof window === "undefined" || !("webkitSpeechRecognition" in window)) {
+    const SpeechRecognition =
+      typeof window !== "undefined" &&
+      ((window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition);
+
+    if (!SpeechRecognition) {
       alert("Speech recognition not supported in this browser.");
       return;
     }
 
-    const recognition = new (window as any).webkitSpeechRecognition();
+    const recognition = new SpeechRecognition();
     recognition.lang = "en-US";
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
