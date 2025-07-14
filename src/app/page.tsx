@@ -1,12 +1,12 @@
 "use client";
+
 import { useState, useEffect, useRef } from "react";
 
-type SpeechRecognitionEvent = Event & {
-  results: SpeechRecognitionResultList;
-};
+type ChatMessage = { role: "user" | "assistant"; content: string };
+type RecognitionEvent = Event & { results: SpeechRecognitionResultList };
 
 export default function Home() {
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -16,11 +16,11 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!input.trim()) return;
 
-    const userMessage = { role: "user", content: input };
+    const userMessage: ChatMessage = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
@@ -39,13 +39,11 @@ export default function Home() {
         ...prev.slice(0, -1),
         { role: "assistant", content: data.response },
       ]);
-    } catch (_) {
+    } catch (err) {
+      console.error("❌ Chat error:", err);
       setMessages((prev) => [
         ...prev.slice(0, -1),
-        {
-          role: "assistant",
-          content: "⚠️ Failed to connect to Quirra's brain.",
-        },
+        { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
       ]);
     }
   };
@@ -61,25 +59,25 @@ export default function Home() {
 
   const handleVoiceInput = () => {
     if (!("webkitSpeechRecognition" in window)) {
-      alert("Speech recognition not supported in this browser.");
+      alert("Speech recognition is not supported in this browser.");
       return;
     }
 
     const recognition = new (window as any).webkitSpeechRecognition();
-    recognition.lang = "auto";
+    recognition.lang = "en-US";
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: RecognitionEvent) => {
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
     };
 
-    recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event);
+    recognition.onerror = (event: Event) => {
+      console.error("🎤 Speech recognition error:", event);
       setListening(false);
     };
 
@@ -94,38 +92,34 @@ export default function Home() {
     <main className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-white flex flex-col">
       <header className="text-center p-6 border-b border-gray-800">
         <h1 className="text-4xl font-bold text-white">Quirra AI</h1>
+        <p className="text-gray-400 text-sm mt-1">Next generation of intelligence, built by vision.</p>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full">
         <div className="flex flex-col gap-4">
-          {messages.map((msg, idx) =>
-            msg.content === "▍" ? (
-              <div
-                key={idx}
-                className="rounded-2xl px-4 py-3 max-w-[80%] self-start text-white text-left bg-gray-900 border border-blue-800 shadow-md animate-pulse"
+          {messages.map((msg, idx) => (
+            <div
+              key={idx}
+              className={`group relative rounded-2xl px-4 py-3 max-w-[80%] whitespace-pre-line leading-relaxed tracking-wide text-base ${
+                msg.role === "user"
+                  ? "bg-blue-600 text-white self-end text-right"
+                  : "bg-gray-900 text-white self-start text-left shadow-md border border-blue-800"
+              }`}
+            >
+              {msg.content === "▍" ? (
+                <span className="animate-pulse text-xl">▍</span>
+              ) : (
+                <span>{msg.content}</span>
+              )}
+              <button
+                className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-xs text-gray-300 hover:text-white transition"
+                onClick={() => copyToClipboard(msg.content)}
+                title="Copy"
               >
-                ▍
-              </div>
-            ) : (
-              <div
-                key={idx}
-                className={`group relative rounded-2xl px-4 py-3 max-w-[80%] whitespace-pre-line leading-relaxed tracking-wide text-base ${
-                  msg.role === "user"
-                    ? "bg-blue-600 text-white self-end text-right"
-                    : "bg-gray-900 text-white self-start text-left shadow-md border border-blue-800"
-                }`}
-              >
-                {msg.content}
-                <button
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-xs text-gray-300 hover:text-white transition"
-                  onClick={() => copyToClipboard(msg.content)}
-                  title="Copy"
-                >
-                  
-                </button>
-              </div>
-            )
-          )}
+                📋
+              </button>
+            </div>
+          ))}
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -134,7 +128,7 @@ export default function Home() {
         onSubmit={handleSubmit}
         className="w-full max-w-4xl mx-auto p-4 bg-black border-t border-gray-800 relative flex items-center"
       >
-        {/* Tools Button */}
+        {/* Tools */}
         <div className="relative mr-2">
           <button
             type="button"
@@ -150,29 +144,29 @@ export default function Home() {
                 onClick={handleVoiceInput}
                 className="block w-full px-4 py-2 text-left hover:bg-gray-800"
               >
-                 Voice Input {listening && "(on)"}
+                🎙️ Voice Input {listening && "(on)"}
               </button>
               <button
                 onClick={handleReset}
                 className="block w-full px-4 py-2 text-left hover:bg-gray-800"
               >
-                 Reset Conversation
+                🔄 Reset Conversation
               </button>
               <div className="border-t border-gray-700 my-1" />
               <button disabled className="block w-full px-4 py-2 text-left text-gray-500">
-                 Think longer (soon)
+                🧠 Think longer (soon)
               </button>
               <button disabled className="block w-full px-4 py-2 text-left text-gray-500">
-                 Generate Image (soon)
+                🖼️ Generate Image (soon)
               </button>
-              <button className="block w-full px-4 py-2 text-left text-gray-500">
-                 Search Web (soon)
+              <button disabled className="block w-full px-4 py-2 text-left text-gray-500">
+                🌐 Search Web (soon)
               </button>
             </div>
           )}
         </div>
 
-        {/* Input Field */}
+        {/* Input */}
         <input
           type="text"
           placeholder="Ask Quirra anything..."
@@ -181,7 +175,6 @@ export default function Home() {
           onChange={(e) => setInput(e.target.value)}
         />
 
-        {/* Send Button (only when input exists) */}
         {input && (
           <button
             type="submit"

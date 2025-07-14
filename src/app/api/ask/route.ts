@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-// 🧠 Global in-memory conversation memory (resets manually)
+// 🧠 Global in-memory message history (resets manually)
 let messageHistory: { role: "system" | "user" | "assistant"; content: string }[] = [
   {
     role: "system",
@@ -37,14 +37,12 @@ export async function POST(req: Request) {
     );
   }
 
-  // 🔁 Support memory reset (when user wants a new session)
   if (reset === true) {
     messageHistory = [messageHistory[0]];
     return NextResponse.json({ response: "🧠 Conversation moved to a fresh session." });
   }
 
   try {
-    // Add user input
     messageHistory.push({ role: "user", content: prompt });
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -57,7 +55,7 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         model: "mistralai/mistral-7b-instruct:free",
-        messages: messageHistory.slice(-12), // Context slice
+        messages: messageHistory.slice(-12),
       }),
     });
 
@@ -79,7 +77,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Record assistant response
     messageHistory.push({ role: "assistant", content: aiResponse });
 
     return NextResponse.json({ response: aiResponse });
