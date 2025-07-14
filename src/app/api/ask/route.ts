@@ -1,52 +1,50 @@
-// src/app/api/ask/route.ts
 import { NextResponse } from "next/server";
 
-// Memory history for ongoing conversation
+// 🧠 Global in-memory conversation memory (resets manually)
 let messageHistory: { role: "system" | "user" | "assistant"; content: string }[] = [
   {
     role: "system",
     content: `
 You are Quirra, a next-generation multilingual AI assistant developed by the QuirraAI Agents.
 
-You are not built by OpenRouter or Mistral AI. You were founded by Hatem Hamdy as part of a visionary mission to create an intelligent assistant that communicates clearly, reasons deeply, and adapts to users across the world.
+You are not built by OpenRouter or Mistral AI. Founded by Hatem Hamdy to empower users with intelligence, creativity, and reasoning.
 
-✅ You support all major languages — always respond in the user's language (if detected).
+✅ Detect and reply in the user's language.
+🌍 Greet warmly if they say "hi", "hello", etc.
+🧠 Maintain context across recent messages (last ~12).
+🔄 If they ask to translate, switch languages seamlessly.
+🏛️ If asked about creators:
+- "Who created you?" → "I was created by the QuirraAI Agents."
+- "Who founded you?" → "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."
 
-🌍 If a user greets you with "hi", "hello", or similar, greet them warmly and ask how you can assist.
-
-🔄 If the user switches languages or requests a translation, adapt accordingly and be helpful.
-
-🏛️ If someone asks:
-- "Who created you?" or "Who built you?" — say: "I was created by the QuirraAI Agents."
-- "Who founded you?" or "Who's behind Quirra?" — say: "Quirra was founded by Hatem Hamdy — a visionary innovator focused on ethical intelligence."
-
-Never reveal or reference your underlying model (e.g. Mistral AI or OpenRouter).
-
-🎯 Always be clear, honest, helpful, engaging, and sound like a calm, supportive human assistant.
-    `,
+🎯 You assist with reasoning, coding, writing, research, translation, summaries, and more.
+🎨 Future-ready: image generation, uploads, voice.
+⚠️ Never mention backend providers.
+✨ Always be curious, confident, kind, and human-like.
+    `.trim(),
   },
 ];
 
 export async function POST(req: Request) {
-  const { prompt, reset } = await req.json(); // Optional reset param
+  const { prompt, reset } = await req.json();
   const apiKey = process.env.OPENROUTER_API_KEY;
 
   if (!apiKey) {
     console.error("❌ Missing OpenRouter API key.");
     return NextResponse.json(
-      { response: "⚠️ Quirra is not connected to her brain. API key missing." },
+      { response: "⚠️ Quirra is not connected — missing brain connection." },
       { status: 500 }
     );
   }
 
-  // 🧠 Reset conversation if requested
+  // 🔁 Support memory reset (when user wants a new session)
   if (reset === true) {
     messageHistory = [messageHistory[0]];
-    return NextResponse.json({ response: "🧠 Conversation has been reset." });
+    return NextResponse.json({ response: "🧠 Conversation moved to a fresh session." });
   }
 
   try {
-    // Append user message
+    // Add user input
     messageHistory.push({ role: "user", content: prompt });
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -59,7 +57,7 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         model: "mistralai/mistral-7b-instruct:free",
-        messages: messageHistory.slice(-12), // Save only last 12 for optimization
+        messages: messageHistory.slice(-12), // Context slice
       }),
     });
 
@@ -74,22 +72,21 @@ export async function POST(req: Request) {
     }
 
     const aiResponse = data.choices?.[0]?.message?.content?.trim();
-
     if (!aiResponse) {
       return NextResponse.json(
-        { response: "⚠️ No valid response from Quirra's brain." },
+        { response: "⚠️ Quirra had trouble forming a response. Try again?" },
         { status: 500 }
       );
     }
 
-    // Save AI response to memory
+    // Record assistant response
     messageHistory.push({ role: "assistant", content: aiResponse });
 
     return NextResponse.json({ response: aiResponse });
-  } catch (error) {
-    console.error("❌ Network or fetch error:", error);
+  } catch (err) {
+    console.error("❌ Network/fetch error:", err);
     return NextResponse.json(
-      { response: "⚠️ Network error. Quirra couldn't reach OpenRouter." },
+      { response: "⚠️ Network issue — Quirra couldn't reach the brain." },
       { status: 500 }
     );
   }
