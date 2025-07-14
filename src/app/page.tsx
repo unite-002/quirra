@@ -4,12 +4,11 @@
 import { useState, useEffect, useRef } from "react";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
-type RecognitionEvent = Event & { results: SpeechRecognitionResultList };
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [listening, setListening] = useState(false);
+  const [listening, setListening] = useState(false); // Keep it for future use
   const [toolsOpen, setToolsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -25,7 +24,6 @@ export default function Home() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
-    // Temporary thinking indicator
     setMessages((prev) => [...prev, { role: "assistant", content: "▍" }]);
 
     try {
@@ -45,10 +43,7 @@ export default function Home() {
       console.error("❌ Chat error:", err);
       setMessages((prev) => [
         ...prev.slice(0, -1),
-        {
-          role: "assistant",
-          content: "⚠️ Failed to connect to Quirra's brain.",
-        },
+        { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
       ]);
     }
   };
@@ -60,38 +55,6 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reset: true }),
     });
-  };
-
-  const handleVoiceInput = () => {
-    const SpeechRecognition =
-      typeof window !== "undefined" &&
-      ((window as any).SpeechRecognition ||
-        (window as any).webkitSpeechRecognition);
-
-    if (!SpeechRecognition) {
-      alert("Speech recognition not supported in this browser.");
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => setListening(true);
-    recognition.onend = () => setListening(false);
-
-    recognition.onresult = (event: RecognitionEvent) => {
-      const transcript = event.results[0][0].transcript;
-      setInput(transcript);
-    };
-
-    recognition.onerror = (event: Event) => {
-      console.error("🎤 Speech recognition error:", event);
-      setListening(false);
-    };
-
-    recognition.start();
   };
 
   const copyToClipboard = async (text: string) => {
@@ -156,12 +119,6 @@ export default function Home() {
           </button>
           {toolsOpen && (
             <div className="absolute bottom-14 left-0 w-56 bg-gray-900 text-sm border border-gray-700 shadow-lg rounded-lg z-50">
-              <button
-                onClick={handleVoiceInput}
-                className="block w-full px-4 py-2 text-left hover:bg-gray-800"
-              >
-                🎙️ Voice Input {listening && "(on)"}
-              </button>
               <button
                 onClick={handleReset}
                 className="block w-full px-4 py-2 text-left hover:bg-gray-800"
