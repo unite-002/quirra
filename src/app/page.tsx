@@ -1,4 +1,3 @@
-// Add a comment to the top
 // Triggering redeploy to Vercel
 "use client";
 
@@ -26,6 +25,7 @@ export default function Home() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
+    // Temporary thinking indicator
     setMessages((prev) => [...prev, { role: "assistant", content: "▍" }]);
 
     try {
@@ -45,7 +45,10 @@ export default function Home() {
       console.error("❌ Chat error:", err);
       setMessages((prev) => [
         ...prev.slice(0, -1),
-        { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
+        {
+          role: "assistant",
+          content: "⚠️ Failed to connect to Quirra's brain.",
+        },
       ]);
     }
   };
@@ -60,8 +63,8 @@ export default function Home() {
   };
 
   const handleVoiceInput = () => {
-    if (!("webkitSpeechRecognition" in window)) {
-      alert("Speech recognition is not supported in this browser.");
+    if (typeof window === "undefined" || !("webkitSpeechRecognition" in window)) {
+      alert("Speech recognition not supported in this browser.");
       return;
     }
 
@@ -86,15 +89,21 @@ export default function Home() {
     recognition.start();
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.error("📋 Copy failed", err);
+    }
   };
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-white flex flex-col">
       <header className="text-center p-6 border-b border-gray-800">
         <h1 className="text-4xl font-bold text-white">Quirra AI</h1>
-        <p className="text-gray-400 text-sm mt-1">Next generation of intelligence, built by vision.</p>
+        <p className="text-gray-400 text-sm mt-1">
+          Next generation of intelligence, built by vision.
+        </p>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full">
@@ -130,7 +139,7 @@ export default function Home() {
         onSubmit={handleSubmit}
         className="w-full max-w-4xl mx-auto p-4 bg-black border-t border-gray-800 relative flex items-center"
       >
-        {/* Tools */}
+        {/* Tools Dropdown */}
         <div className="relative mr-2">
           <button
             type="button"
@@ -168,7 +177,7 @@ export default function Home() {
           )}
         </div>
 
-        {/* Input */}
+        {/* Input Field */}
         <input
           type="text"
           placeholder="Ask Quirra anything..."
