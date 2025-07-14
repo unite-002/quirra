@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-// 🧠 Global in-memory message history (resets manually)
+// 🧠 Persistent in-memory message history (until reset)
 let messageHistory: { role: "system" | "user" | "assistant"; content: string }[] = [
   {
     role: "system",
@@ -37,12 +37,22 @@ export async function POST(req: Request) {
     );
   }
 
+  // 🧼 Ignore empty input
+  if (!prompt && !reset) {
+    return NextResponse.json(
+      { response: "⚠️ Please enter a prompt for Quirra to respond to." },
+      { status: 400 }
+    );
+  }
+
+  // 🔁 Reset conversation if requested
   if (reset === true) {
     messageHistory = [messageHistory[0]];
-    return NextResponse.json({ response: "🧠 Conversation moved to a fresh session." });
+    return NextResponse.json({ response: "🧠 Conversation reset. Quirra is ready for a new session." });
   }
 
   try {
+    // 📝 Add user's prompt to conversation history
     messageHistory.push({ role: "user", content: prompt });
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -50,7 +60,7 @@ export async function POST(req: Request) {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://quirra.vercel.app",
+        "HTTP-Referer": "https://quirra.vercel.app", // Your live domain
         "X-Title": "Quirra",
       },
       body: JSON.stringify({
@@ -64,26 +74,28 @@ export async function POST(req: Request) {
     if (data.error) {
       console.error("❌ OpenRouter API error:", data.error);
       return NextResponse.json(
-        { response: `⚠️ OpenRouter Error: ${data.error.message}` },
+        { response: `⚠️ Error from brain: ${data.error.message}` },
         { status: 500 }
       );
     }
 
-    const aiResponse = data.choices?.[0]?.message?.content?.trim();
-    if (!aiResponse) {
+    const aiReply = data.choices?.[0]?.message?.content?.trim();
+
+    if (!aiReply) {
       return NextResponse.json(
-        { response: "⚠️ Quirra had trouble forming a response. Try again?" },
+        { response: "⚠️ Quirra couldn’t think of a reply. Try again?" },
         { status: 500 }
       );
     }
 
-    messageHistory.push({ role: "assistant", content: aiResponse });
+    // 💬 Add assistant's reply to the memory
+    messageHistory.push({ role: "assistant", content: aiReply });
 
-    return NextResponse.json({ response: aiResponse });
+    return NextResponse.json({ response: aiReply });
   } catch (err) {
     console.error("❌ Network/fetch error:", err);
     return NextResponse.json(
-      { response: "⚠️ Network issue — Quirra couldn't reach the brain." },
+      { response: "⚠️ Quirra encountered a network issue trying to think. Please try again." },
       { status: 500 }
     );
   }
