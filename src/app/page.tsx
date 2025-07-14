@@ -8,7 +8,6 @@ type ChatMessage = { role: "user" | "assistant"; content: string };
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [listening, setListening] = useState(false); // Keep it for future use
   const [toolsOpen, setToolsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
