@@ -45,7 +45,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // 🔄 Reset session
   if (reset === true) {
     messageHistory = [messageHistory[0]];
     return NextResponse.json({
@@ -67,7 +66,7 @@ export async function POST(req: Request) {
       "who is the ceo of",
     ].some((keyword) => prompt.toLowerCase().includes(keyword));
 
-    // 🌐 Do live web search if question needs real-time info
+    // 🌐 Live search if needed
     if (needsLiveSearch && serperKey) {
       const searchRes = await fetch("https://google.serper.dev/search", {
         method: "POST",
@@ -79,10 +78,22 @@ export async function POST(req: Request) {
       });
 
       const searchData = await searchRes.json();
-      const topResult = searchData?.organic?.[0]?.snippet;
+      const results = searchData?.organic?.filter(
+        (r: any) => r.snippet && r.title && r.link && !r.link.includes("cnn.com") // optionally filter homepages
+      );
 
-      if (topResult) {
-        return NextResponse.json({ response: topResult });
+      if (results && results.length > 0) {
+        const formatted = results
+          .slice(0, 3)
+          .map(
+            (r: any, i: number) =>
+              `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`
+          )
+          .join("\n\n");
+
+        return NextResponse.json({
+          response: `🧠 Here’s what I found online:\n\n${formatted}`,
+        });
       }
     }
 
