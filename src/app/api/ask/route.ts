@@ -45,7 +45,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // 🔄 Reset session
   if (reset === true) {
     messageHistory = [messageHistory[0]];
     return NextResponse.json({
@@ -70,7 +69,7 @@ export async function POST(req: Request) {
       "news now",
     ].some((keyword) => prompt.toLowerCase().includes(keyword));
 
-    // 🌐 Smart Web Search via Serper
+    // 🌐 Web Search Integration (Serper)
     if (needsLiveSearch && serperKey) {
       const searchRes = await fetch("https://google.serper.dev/search", {
         method: "POST",
@@ -82,12 +81,18 @@ export async function POST(req: Request) {
       });
 
       const searchData = await searchRes.json();
-      const results = searchData?.organic?.filter((r: any) => r.title && r.snippet && r.link);
+
+      type SearchResult = { title: string; snippet: string; link: string };
+
+      const results = (searchData?.organic as SearchResult[] | undefined)?.filter(
+        (r) => r.title && r.snippet && r.link
+      );
 
       if (results && results.length > 0) {
-        const topSummaries = results.slice(0, 3).map((r: any, i: number) =>
-          `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`
-        ).join("\n\n");
+        const topSummaries = results
+          .slice(0, 3)
+          .map((r) => `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`)
+          .join("\n\n");
 
         console.log("✅ Serper search results used.");
         return NextResponse.json({
