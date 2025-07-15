@@ -27,9 +27,10 @@ You are not built by OpenRouter or Mistral AI. Founded by Hatem Hamdy to empower
 
 export async function POST(req: Request) {
   const { prompt, reset } = await req.json();
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const serperKey = process.env.SERPER_API_KEY;
 
-  if (!apiKey) {
+  if (!openRouterKey) {
     console.error("❌ Missing OpenRouter API key.");
     return NextResponse.json(
       { response: "⚠️ Quirra is not connected — missing brain connection." },
@@ -37,7 +38,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // 🧼 Ignore empty input
   if (!prompt && !reset) {
     return NextResponse.json(
       { response: "⚠️ Please enter a prompt for Quirra to respond to." },
@@ -45,22 +45,56 @@ export async function POST(req: Request) {
     );
   }
 
-  // 🔁 Reset conversation if requested
+  // 🔄 Reset session
   if (reset === true) {
     messageHistory = [messageHistory[0]];
-    return NextResponse.json({ response: "🧠 Conversation reset. Quirra is ready for a new session." });
+    return NextResponse.json({
+      response: "🧠 Conversation reset. Quirra is ready for a new session.",
+    });
   }
 
   try {
-    // 📝 Add user's prompt to conversation history
+    const needsLiveSearch = [
+      "current year",
+      "what year is it",
+      "today's news",
+      "latest news",
+      "today's date",
+      "weather",
+      "president of",
+      "who won",
+      "how much is",
+      "who is the ceo of",
+    ].some((keyword) => prompt.toLowerCase().includes(keyword));
+
+    // 🌐 Do live web search if question needs real-time info
+    if (needsLiveSearch && serperKey) {
+      const searchRes = await fetch("https://google.serper.dev/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": serperKey,
+        },
+        body: JSON.stringify({ q: prompt }),
+      });
+
+      const searchData = await searchRes.json();
+      const topResult = searchData?.organic?.[0]?.snippet;
+
+      if (topResult) {
+        return NextResponse.json({ response: topResult });
+      }
+    }
+
+    // 🧠 Fallback to LLM
     messageHistory.push({ role: "user", content: prompt });
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const llmRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${openRouterKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://quirra.vercel.app", // Your live domain
+        "HTTP-Referer": "https://quirra.vercel.app",
         "X-Title": "Quirra",
       },
       body: JSON.stringify({
@@ -69,17 +103,17 @@ export async function POST(req: Request) {
       }),
     });
 
-    const data = await response.json();
+    const llmData = await llmRes.json();
 
-    if (data.error) {
-      console.error("❌ OpenRouter API error:", data.error);
+    if (llmData.error) {
+      console.error("❌ OpenRouter API error:", llmData.error);
       return NextResponse.json(
-        { response: `⚠️ Error from brain: ${data.error.message}` },
+        { response: `⚠️ Error from brain: ${llmData.error.message}` },
         { status: 500 }
       );
     }
 
-    const aiReply = data.choices?.[0]?.message?.content?.trim();
+    const aiReply = llmData.choices?.[0]?.message?.content?.trim();
 
     if (!aiReply) {
       return NextResponse.json(
@@ -88,9 +122,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 💬 Add assistant's reply to the memory
     messageHistory.push({ role: "assistant", content: aiReply });
-
     return NextResponse.json({ response: aiReply });
   } catch (err) {
     console.error("❌ Network/fetch error:", err);
