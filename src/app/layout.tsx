@@ -2,7 +2,6 @@
 
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
-import { geist } from '@/fonts/geist'
 
 // App Metadata
 export const metadata: Metadata = {
@@ -25,10 +24,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html
-      lang="en"
-      className={`${geist.sans.variable} ${geist.mono.variable}`}
-    >
+    <html lang="en">
       <body className="bg-black text-white antialiased font-sans">
         {children}
       </body>
