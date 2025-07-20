@@ -2,16 +2,15 @@
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
+
+  // No need for `experimental.serverActions` anymore
   experimental: {
-    // Enable if you're using the /app directory (App Router)
+    // Uncomment only if you're actually using the app directory or Turbopack
     // appDir: true,
-
-    // Enable if you're testing Turbopack (experimental bundler)
     // turbopack: true,
-
-    serverActions: true, // Enable Server Actions if used
   },
-  // Optional: add custom headers, rewrites, or images domains
+
+  // Optional example if you want to allow loading images from external domains
   // images: {
   //   domains: ['your-domain.com'],
   // },
