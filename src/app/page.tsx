@@ -1,161 +1,126 @@
-// Triggering redeploy to Vercel
-"use client";
+'use client';
 
-import { useState, useEffect, useRef } from "react";
-
-type ChatMessage = { role: "user" | "assistant"; content: string };
+import Link from 'next/link';
+import { motion } from 'framer-motion';
 
 export default function Home() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    const userMessage: ChatMessage = { role: "user", content: input };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-
-    setMessages((prev) => [...prev, { role: "assistant", content: "▍" }]);
-
-    try {
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: input }),
-      });
-
-      const data = await res.json();
-
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: data.response },
-      ]);
-    } catch (err) {
-      console.error("❌ Chat error:", err);
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: "⚠️ Failed to connect to Quirra's brain." },
-      ]);
-    }
-  };
-
-  const handleReset = async () => {
-    setMessages([]);
-    await fetch("/api/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reset: true }),
-    });
-  };
-
-  const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      console.error("📋 Copy failed", err);
-    }
-  };
-
   return (
-    <main className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-white flex flex-col">
-      <header className="text-center p-6 border-b border-gray-800">
-        <h1 className="text-4xl font-bold text-white">Quirra AI</h1>
-        <p className="text-gray-400 text-sm mt-1">
-        </p>
+    <main className="min-h-screen bg-[#040417] text-white font-sans">
+      {/* Header */}
+      <header className="flex justify-end items-center p-6 md:px-12">
+        <motion.div
+          initial={{ opacity: 0, x: 10 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.3, duration: 0.6 }}
+          className="flex space-x-4"
+        >
+          <Link
+            href="/sign-in"
+            className="px-5 py-2 border border-white rounded-xl hover:bg-white hover:text-[#040417] transition"
+          >
+            Sign In
+          </Link>
+          <Link
+            href="/sign-up"
+            className="px-5 py-2 bg-white text-[#040417] font-medium rounded-xl hover:bg-opacity-80 transition"
+          >
+            Sign Up
+          </Link>
+        </motion.div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full">
-        <div className="flex flex-col gap-4">
-          {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              className={`group relative rounded-2xl px-4 py-3 max-w-[80%] whitespace-pre-line leading-relaxed tracking-wide text-base ${
-                msg.role === "user"
-                  ? "bg-blue-600 text-white self-end text-right"
-                  : "bg-gray-900 text-white self-start text-left shadow-md border border-blue-800"
-              }`}
-            >
-              {msg.content === "▍" ? (
-                <span className="animate-pulse text-xl">▍</span>
-              ) : (
-                <span>{msg.content}</span>
-              )}
-              <button
-                className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-xs text-gray-300 hover:text-white transition"
-                onClick={() => copyToClipboard(msg.content)}
-                title="Copy"
-              >
-                📋
-              </button>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+      {/* Hero Section */}
+      <section className="text-center px-6 md:px-20 pt-12 pb-24">
+        <motion.h1
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.8 }}
+          className="text-5xl md:text-7xl font-extrabold bg-gradient-to-br from-white to-gray-400 text-transparent bg-clip-text drop-shadow-[0_3px_10px_rgba(255,255,255,0.25)]"
+        >
+          QuirraAI
+        </motion.h1>
 
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-4xl mx-auto p-4 bg-black border-t border-gray-800 relative flex items-center"
-      >
-        {/* Tools Dropdown */}
-        <div className="relative mr-2">
-          <button
-            type="button"
-            onClick={() => setToolsOpen((prev) => !prev)}
-            className="bg-gray-800 p-2 rounded-full border border-gray-700 hover:border-blue-500 text-white text-sm"
-            title="Tools"
+        <motion.p
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3, duration: 0.8 }}
+          className="text-lg md:text-xl mt-6 max-w-3xl mx-auto text-gray-300"
+        >
+          Your deeply personal, emotionally intelligent AI — built to mentor, support, and evolve with you. Private, ethical, and designed for growth.
+        </motion.p>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6, duration: 0.8 }}
+          className="mt-10 flex justify-center gap-4"
+        >
+          <Link href="/sign-up">
+            <button className="px-6 py-3 bg-white text-[#040417] font-semibold rounded-xl hover:bg-opacity-90 transition text-lg shadow">
+              Get Started
+            </button>
+          </Link>
+          <Link href="/learn-more">
+            <button className="px-6 py-3 border border-white text-white rounded-xl hover:bg-white hover:text-[#040417] transition text-lg">
+              Learn More
+            </button>
+          </Link>
+        </motion.div>
+      </section>
+
+      {/* Features Section */}
+      <section className="grid gap-10 px-6 md:px-20 pb-28 md:grid-cols-2 lg:grid-cols-3">
+        {features.map((feature, i) => (
+          <motion.div
+            key={feature.title}
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.2, duration: 0.6 }}
+            className="bg-[#070a1a] rounded-2xl p-6 shadow-md border border-[#12152a] hover:shadow-lg hover:border-white transition duration-300"
           >
-            +
-          </button>
-          {toolsOpen && (
-            <div className="absolute bottom-14 left-0 w-56 bg-gray-900 text-sm border border-gray-700 shadow-lg rounded-lg z-50">
-              <button
-                onClick={handleReset}
-                className="block w-full px-4 py-2 text-left hover:bg-gray-800"
-              >
-                🔄 Reset Conversation
-              </button>
-              <div className="border-t border-gray-700 my-1" />
-              <button disabled className="block w-full px-4 py-2 text-left text-gray-500">
-                🧠 Think longer (soon)
-              </button>
-              <button disabled className="block w-full px-4 py-2 text-left text-gray-500">
-                🖼️ Generate Image (soon)
-              </button>
-              <button disabled className="block w-full px-4 py-2 text-left text-gray-500">
-                🌐 Search Web (soon)
-              </button>
-            </div>
-          )}
-        </div>
+            <h3 className="text-xl font-semibold text-white mb-2">{feature.title}</h3>
+            <p className="text-gray-400 text-sm leading-relaxed">{feature.description}</p>
+          </motion.div>
+        ))}
+      </section>
 
-        {/* Input Field */}
-        <input
-          type="text"
-          placeholder="Ask Quirra anything..."
-          className="flex-1 p-3 rounded-full bg-gray-800 text-white border border-blue-600 focus:outline-none"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-        />
-
-        {input && (
-          <button
-            type="submit"
-            className="ml-2 p-3 bg-gray-600 hover:bg-gray-700 text-white rounded-full text-sm"
-            title="Send"
-          >
-            ↑
-          </button>
-        )}
-      </form>
+      {/* Footer */}
+      <footer className="py-8 text-center text-sm text-gray-500 border-t border-[#12152a]">
+        © {new Date().getFullYear()} QuirraAI. All rights reserved.
+      </footer>
     </main>
   );
 }
+
+const features = [
+  {
+    title: 'Deep Memory & Personality Modeling',
+    description:
+      'Quirra continuously learns from your interactions, adapting to your mindset, learning style, emotional states, and ambitions for deeply tailored support.',
+  },
+  {
+    title: 'Emotionally Intelligent Conversations',
+    description:
+      'Responds not only to what you say — but how you feel. Designed to uplift, support, and engage with empathy in every context.',
+  },
+  {
+    title: 'Built-in Motivation & Mentorship Engine',
+    description:
+      'Turns your goals into a guided path — helping you break habits, build momentum, and stay accountable based on how you think.',
+  },
+  {
+    title: 'Cross-Domain Intelligence',
+    description:
+      'Connects knowledge across education, business, research, and life planning — all in one unified, deeply integrated AI assistant.',
+  },
+  {
+    title: 'Privacy-First by Design',
+    description:
+      'No tracking. No profiling. All data is local or encrypted. Quirra is built ethically — to protect you and your growth, not exploit it.',
+  },
+  {
+    title: 'Future-Proof & Quantum-Ready',
+    description:
+      'Quirra is built on scalable architecture prepared for quantum computing — ready to evolve with the next generation of technology.',
+  },
+];

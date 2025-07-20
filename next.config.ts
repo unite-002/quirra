@@ -1,8 +1,8 @@
-// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    turbo: false, // disable Turbopack
+    // appDir: false,
+    // turbopack: false,
   },
 };
 
