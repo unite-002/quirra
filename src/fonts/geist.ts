@@ -20,4 +20,5 @@ export const geist = localFont({
   ],
   variable: '--font-geist',
   display: 'swap',
+  preload: true,
 })
