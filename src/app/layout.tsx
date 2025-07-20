@@ -1,44 +1,60 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
+// src/app/layout.tsx
+import type { Metadata } from 'next'
+import localFont from 'next/font/local'
+import './globals.css'
 
-// Load Geist font
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-  display: "swap",
-});
+// Load Geist Sans (Regular + Medium)
+const geistSans = localFont({
+  src: [
+    {
+      path: '../fonts/Geist-Regular.woff2',
+      weight: '400',
+      style: 'normal',
+    },
+    {
+      path: '../fonts/Geist-Medium.woff2',
+      weight: '500',
+      style: 'normal',
+    },
+  ],
+  variable: '--font-geist-sans',
+  display: 'swap',
+})
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-  display: "swap",
-});
+// Load Geist Mono (Regular)
+const geistMono = localFont({
+  src: [
+    {
+      path: '../fonts/GeistMono-Regular.woff2',
+      weight: '400',
+      style: 'normal',
+    },
+  ],
+  variable: '--font-geist-mono',
+  display: 'swap',
+})
 
-// Metadata for SEO & app identity
+// App Metadata
 export const metadata: Metadata = {
-  title: "Quirra — Next-Gen AI Assistant",
+  title: 'Quirra — Next-Gen AI Assistant',
   description:
-    "Quirra is a future-ready, multilingual AI assistant built for reasoning, memory, and emotional intelligence.",
+    'Quirra is a future-ready, multilingual AI assistant built for reasoning, memory, and emotional intelligence.',
   icons: {
-    icon: "/favicon.ico",
+    icon: '/favicon.ico',
   },
-  themeColor: "#000000",
-};
+  themeColor: '#000000',
+}
 
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <head />
-      <body
-        className={`bg-black text-white antialiased ${geistSans.variable} ${geistMono.variable}`}
-      >
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className="bg-black text-white antialiased font-sans">
         {children}
       </body>
     </html>
-  );
+  )
 }
