@@ -1,22 +1,19 @@
-// tailwind.config.js
+// tailwind.config.ts
 import type { Config } from 'tailwindcss';
 
 const config: Config = {
   darkMode: 'class',
   content: [
-    './src/app/**/*.{js,ts,jsx,tsx}',
-    './src/pages/**/*.{js,ts,jsx,tsx}',
-    './src/components/**/*.{js,ts,jsx,tsx}',
-    './src/layouts/**/*.{js,ts,jsx,tsx}',
-    './src/utils/**/*.{js,ts}',
+    './src/**/*.{js,ts,jsx,tsx}',
     './app/**/*.{js,ts,jsx,tsx}',
-    './pages/**/*.{js,ts,jsx,tsx}',
     './components/**/*.{js,ts,jsx,tsx}',
+    './layouts/**/*.{js,ts,jsx,tsx}',
+    './pages/**/*.{js,ts,jsx,tsx}',
+    './utils/**/*.{js,ts}',
   ],
   theme: {
     extend: {
       colors: {
-        // Map directly to your CSS variables
         border: 'var(--border)',
         input: 'var(--input)',
         ring: 'var(--ring)',
@@ -33,9 +30,7 @@ const config: Config = {
         },
         destructive: {
           DEFAULT: 'var(--destructive)',
-          // Add foreground if you plan to use destructive-foreground
-          // Make sure --destructive-foreground is also in globals.css
-          foreground: 'var(--destructive-foreground, oklch(0.984 0.003 247.858))', // Added a fallback
+          foreground: 'var(--destructive-foreground, oklch(0.984 0.003 247.858))',
         },
         muted: {
           DEFAULT: 'var(--muted)',
@@ -53,14 +48,15 @@ const config: Config = {
           DEFAULT: 'var(--card)',
           foreground: 'var(--card-foreground)',
         },
-        // If you want to use chart-1, chart-2 etc. as Tailwind classes
+
+        // Chart colors
         'chart-1': 'var(--chart-1)',
         'chart-2': 'var(--chart-2)',
         'chart-3': 'var(--chart-3)',
         'chart-4': 'var(--chart-4)',
         'chart-5': 'var(--chart-5)',
 
-        // If you want to use sidebar-related colors as Tailwind classes
+        // Sidebar colors
         sidebar: 'var(--sidebar)',
         'sidebar-foreground': 'var(--sidebar-foreground)',
         'sidebar-primary': 'var(--sidebar-primary)',
@@ -70,7 +66,7 @@ const config: Config = {
         'sidebar-border': 'var(--sidebar-border)',
         'sidebar-ring': 'var(--sidebar-ring)',
 
-        // Your existing quirra colors
+        // Quirra custom brand colors
         'quirra-deep': '#070b18',
         'quirra-blue': '#15204b',
         'quirra-soft': '#2b375f',

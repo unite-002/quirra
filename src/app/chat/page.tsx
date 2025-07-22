@@ -1,57 +1,123 @@
-// src/app/chat/page.tsx (UPDATED - Profile button removed from sidebar)
+// src/app/chat/page.tsx
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { supabase } from "@/utils/supabase";
+import { useState, useEffect, useRef, Fragment } from "react";
+import { supabase } from "@/utils/supabase"; // Assumes your Supabase client is correctly configured here
 import { useRouter } from "next/navigation";
 import {
-  MenuIcon, // Hamburger icon for opening/closing sidebar
+  MenuIcon,
   Settings,
-  User, // Keep User icon if you use it elsewhere, otherwise remove
   MessageSquarePlus,
   Copy,
   Send,
-  Loader2, // Keep Loader2 for other loading states if needed, or remove if not
+  Loader2,
   LogOut,
-  Check, // New icon for 'copied' feedback
+  Check,
   RotateCcw,
-} from "lucide-react";
+  Laugh,
+  Frown,
+} from "lucide-react"; // Ensure lucide-react is installed: npm install lucide-react
+import { PersonalityOnboarding } from "@/components/PersonalityOnboarding"; // Your updated onboarding component
 
-type ChatMessage = { role: "user" | "assistant"; content: string };
+// For Markdown rendering and Syntax Highlighting
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm'; // For GitHub Flavored Markdown (tables, task lists etc.)
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { dark } from 'react-syntax-highlighter/dist/cjs/styles/prism'; // A dark theme for code blocks
+
+// Define the specific props for the custom 'code' component passed to ReactMarkdown
+// IMPORTANT FIX: Make children optional to align with react-markdown's internal types
+interface CodeProps {
+  inline?: boolean;
+  className?: string;
+  children?: React.ReactNode; // <--- CHANGED TO OPTIONAL
+  node?: any; // `node` is also passed by react-markdown, typing it as 'any' for simplicity here
+}
+
+// Define the shape of ChatMessage and PersonalityProfile for type safety
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  emotion_score?: number; // Detected emotion from API for user messages
+  personality_profile?: Record<string, string>; // User's profile, saved with user messages (historical)
+};
+
+interface PersonalityProfile {
+  learning_style: string;
+  communication_preference: string;
+  feedback_preference: string;
+}
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [showWelcomeMessage, setShowWelcomeMessage] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null); // State for copy feedback
+  const [userName, setUserName] = useState<string | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  // ✅ Redirect if not logged in and load history
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // --- Authentication and History Loading ---
   useEffect(() => {
     const checkAuthAndLoadHistory = async () => {
+      setIsInitialLoading(true);
       const {
         data: { session },
         error,
       } = await supabase.auth.getSession();
 
       if (error || !session) {
-        router.push("/login"); // or "/sign-in" depending on your route
+        router.push("/login");
+        setIsInitialLoading(false);
         return;
       }
 
-      // Set user email if session exists
       if (session.user?.email) {
         setUserEmail(session.user.email);
+        const namePart = session.user.email.split('@')[0];
+        const formattedName = namePart.replace(/[._]/g, ' ').split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        setUserName(formattedName);
       }
 
-      // Load history only if user is authenticated
+      let loadedProfile: PersonalityProfile | null = null;
+      const storedProfile = localStorage.getItem('quirra_personality_profile');
+      if (storedProfile) {
+        try {
+          const parsedProfile: PersonalityProfile = JSON.parse(storedProfile);
+          loadedProfile = parsedProfile;
+        } catch (e) {
+          console.error("Failed to parse personality profile from localStorage", e);
+          localStorage.removeItem('quirra_personality_profile');
+        }
+      }
+
+      if (!loadedProfile) {
+        const { data: profileData, error: profileError } = await supabase
+          .from("user_profiles")
+          .select("personality_profile")
+          .eq('user_id', session.user.id)
+          .single();
+
+        if (profileError && profileError.code !== 'PGRST116') {
+          console.error("❌ Failed to load personality profile from DB:", profileError.message);
+        } else if (profileData && profileData.personality_profile) {
+          loadedProfile = profileData.personality_profile as PersonalityProfile;
+          localStorage.setItem('quirra_personality_profile', JSON.stringify(loadedProfile));
+        }
+      }
+      setUserPersonalityProfile(loadedProfile);
+
       const { data, error: fetchError } = await supabase
         .from("messages")
-        .select("*")
+        .select("role, content, emotion_score, personality_profile")
+        .eq('user_id', session.user.id)
         .order("created_at", { ascending: true });
 
       if (fetchError) {
@@ -60,110 +126,195 @@ export default function Home() {
         const chatData = data.map((msg: any) => ({
           role: msg.role,
           content: msg.content,
+          emotion_score: msg.emotion_score,
+          personality_profile: msg.personality_profile,
         }));
         setMessages(chatData);
-        if (chatData.length > 0) {
-          setShowWelcomeMessage(false);
-        }
       }
+      setIsInitialLoading(false);
     };
 
     checkAuthAndLoadHistory();
   }, [router]);
 
-  // 🔽 Auto-scroll to latest message
+  // --- Effect to scroll to the bottom of the chat on new messages ---
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // --- Handler for submitting a new chat message ---
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !userPersonalityProfile) return;
 
-    setShowWelcomeMessage(false);
     setIsLoading(true);
 
     const userMessage: ChatMessage = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
-    // Add a temporary "typing" message for the assistant
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    let accumulatedAssistantResponse = "";
+    let detectedEmotionScore: number | undefined;
 
     try {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userMessage.content }),
+        body: JSON.stringify({
+          prompt: userMessage.content,
+          userName: userName,
+          personalityProfile: userPersonalityProfile,
+        }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
+      if (!res.ok || !res.body) {
+        const errorText = await res.text();
+        throw new Error(`HTTP error! status: ${res.status}, Message: ${errorText || 'Unknown error'}`);
       }
 
-      const data = await res.json();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+      let buffer = "";
 
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: data.response },
-      ]);
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
 
-      await supabase.from("messages").insert([
-        { role: userMessage.role, content: userMessage.content },
-        { role: "assistant", content: data.response },
-      ]);
-    } catch (err) {
-      console.error("❌ Chat error:", err);
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        {
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            const jsonStr = line.substring(5).trim();
+            if (jsonStr === '[DONE]') {
+              done = true;
+              break;
+            }
+            try {
+              const data = JSON.parse(jsonStr);
+              if (typeof data.emotion_score === 'number' && detectedEmotionScore === undefined) {
+                  detectedEmotionScore = data.emotion_score;
+              }
+              const deltaContent = data.content || '';
+              accumulatedAssistantResponse += deltaContent;
+
+              setMessages((prevMessages) => {
+                const updatedMessages = [...prevMessages];
+                const lastAssistantMessage = updatedMessages[updatedMessages.length - 1];
+
+                if (lastAssistantMessage && lastAssistantMessage.role === "assistant") {
+                  lastAssistantMessage.content = accumulatedAssistantResponse;
+                }
+                return updatedMessages;
+              });
+            } catch (e) {
+              console.error("Error parsing JSON from stream chunk:", e, "Raw:", jsonStr);
+            }
+          }
+        }
+      }
+
+      setMessages((prev) => {
+        const updatedMessages = [...prev];
+        const lastUserMessageIndex = updatedMessages.findLastIndex(msg => msg.role === 'user');
+        if (lastUserMessageIndex !== -1 && detectedEmotionScore !== undefined) {
+            updatedMessages[lastUserMessageIndex] = {
+                ...updatedMessages[lastUserMessageIndex],
+                emotion_score: detectedEmotionScore
+            };
+        }
+        return updatedMessages;
+      });
+
+    } catch (err: any) {
+      console.error("❌ Chat error:", err.message);
+      setMessages((prev) => {
+        const updatedMessages = [...prev];
+        if (updatedMessages.length > 0 && updatedMessages[updatedMessages.length - 1]?.content === "") {
+            updatedMessages.pop();
+        }
+        updatedMessages.push({
           role: "assistant",
-          content: "⚠️ Failed to connect to Quirra's brain. Please try again.",
-        },
-      ]);
+          content: `⚠️ Failed to get a response from Quirra. ${err.message}. Please try again.`,
+        });
+        return updatedMessages;
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
+  // --- Handler for resetting the conversation ---
   const handleReset = async () => {
     if (isLoading) return;
     setMessages([]);
-    setShowWelcomeMessage(true);
-    setIsSidebarOpen(false); // Close sidebar after reset
+    setIsSidebarOpen(false);
+
     try {
-      await fetch("/api/ask", {
+      const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reset: true }),
       });
-      console.log("Conversation history reset on server.");
-    } catch (err) {
-      console.error("❌ Failed to reset conversation on server:", err);
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(`HTTP error! status: ${res.status}, Message: ${errorData.response || 'Unknown error'}`);
+      }
+      console.log("Conversation history reset on server and client.");
+    } catch (err: any) {
+      console.error("❌ Failed to reset conversation on server:", err.message);
+      alert(`Failed to reset conversation: ${err.message}`);
     }
   };
 
+  // --- Handler for starting a new chat (client-side only for now) ---
   const handleNewChat = () => {
     if (isLoading) return;
     setMessages([]);
-    setShowWelcomeMessage(true);
     setIsSidebarOpen(false);
   };
 
+  // --- Handler for user logout ---
   const handleLogout = async () => {
     router.push("/sign-out");
   };
 
-  const copyToClipboard = async (text: string, messageId: number) => {
+  // --- Utility function to copy text to clipboard ---
+  const copyToClipboard = async (text: string, messageId: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedMessageId(messageId);
-      setTimeout(() => setCopiedMessageId(null), 2000); // Reset after 2 seconds
+      setTimeout(() => setCopiedMessageId(null), 2000);
     } catch (err) {
       console.error("📋 Copy failed", err);
     }
   };
 
+  // --- Conditional Rendering: Full-page loading spinner ---
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
+        <Loader2 className="animate-spin text-blue-400" size={48} />
+        <p className="text-white text-xl ml-4">Loading your profile and history...</p>
+      </div>
+    );
+  }
+
+  // --- Conditional Rendering: Personality Onboarding ---
+  if (!userPersonalityProfile) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
+        <PersonalityOnboarding onComplete={setUserPersonalityProfile} />
+      </div>
+    );
+  }
+
+  // --- Main Chat UI (rendered after initial loading and onboarding are complete) ---
   return (
     <main className="min-h-screen bg-[#0A0B1A] text-white flex flex-col">
       {/* Sidebar */}
@@ -173,7 +324,6 @@ export default function Home() {
         } transition-transform duration-300 ease-in-out flex flex-col`}
       >
         <div className="p-4 flex items-center justify-start border-b border-[#1a213a]">
-          {/* MenuIcon here now toggles sidebar */}
           <button
             onClick={() => setIsSidebarOpen((prev) => !prev)}
             className="text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-[#1a213a] mr-3"
@@ -205,26 +355,22 @@ export default function Home() {
           {userEmail && (
             <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-[#1a213a] border border-[#2a304e]">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold text-white">
-                {userEmail[0]?.toUpperCase()}
+                {userName ? userName[0]?.toUpperCase() : userEmail[0]?.toUpperCase()}
               </div>
               <span className="text-gray-200 text-base overflow-hidden text-ellipsis whitespace-nowrap">
-                {userEmail}
+                {userName || userEmail}
               </span>
             </div>
           )}
+          {userPersonalityProfile && (
+            <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-left text-gray-400 text-sm">
+                <p className="text-xs">
+                  Style: <span className="text-gray-200 capitalize">{userPersonalityProfile.learning_style || 'N/A'}</span>,
+                  Comm: <span className="text-gray-200 capitalize">{userPersonalityProfile.communication_preference || 'N/A'}</span>
+                </p>
+            </div>
+          )}
 
-          {/* Profile button removed */}
-          {/*
-          <button
-            onClick={() => {
-              router.push("/profile");
-              setIsSidebarOpen(false);
-            }}
-            className="flex items-center gap-3 px-4 py-2 rounded-lg text-left text-gray-300 hover:bg-[#1a213a] hover:text-white transition-colors text-lg"
-          >
-            <User size={20} /> Profile
-          </button>
-          */}
 
           <button
             onClick={() => {
@@ -244,7 +390,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <div
         className={`flex-1 flex flex-col transition-all duration-300 ease-in-out ${
           isSidebarOpen ? "ml-64" : "ml-0"
@@ -252,7 +398,7 @@ export default function Home() {
       >
         <header className="p-4 flex items-center gap-4 border-b border-[#1a213a] bg-[#0A0B1A] shadow-lg">
           <button
-            onClick={() => setIsSidebarOpen((prev) => !prev)} // This button now toggles the sidebar
+            onClick={() => setIsSidebarOpen((prev) => !prev)}
             className="text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-[#1a213a]"
             aria-label="Toggle sidebar"
           >
@@ -260,7 +406,6 @@ export default function Home() {
           </button>
           <h1 className="text-xl font-bold text-white">Quirra</h1>
           <div className="flex-1"></div>
-          {/* Reset Conversation button moved to header for quick access, similar to Gemini */}
           {messages.length > 0 && (
             <button
               onClick={handleReset}
@@ -272,8 +417,8 @@ export default function Home() {
           )}
         </header>
 
-        <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full flex flex-col">
-          {showWelcomeMessage && messages.length === 0 && (
+        <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full flex flex-col custom-scrollbar">
+          {messages.length === 0 && (
             <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 text-3xl font-semibold animate-fadeIn">
               How can I help you today?
             </div>
@@ -289,24 +434,81 @@ export default function Home() {
                     : "bg-[#1a213a] text-white self-start rounded-bl-none shadow-md border border-[#2a304e]"
                 }`}
               >
-                {/* Conditional rendering for the typing indicator */}
                 {msg.role === "assistant" && msg.content === "" && isLoading ? (
-                  <span className="animate-typing-dots text-lg"></span>
+                  <span className="animate-typing-dots text-lg">. . .</span>
                 ) : (
-                  <>
-                    <span>{msg.content}</span>
+                  <Fragment>
+                    <ReactMarkdown
+                      components={{
+                        code({ node, inline, className, children, ...props }: CodeProps) {
+                          const match = /language-(\w+)/.exec(className || '');
+                          return !inline && match ? (
+                            <div className="relative rounded-md bg-gray-800 p-2 font-mono text-sm my-2 overflow-x-auto">
+                                <div className="flex justify-between items-center px-2 py-1 bg-gray-700 rounded-t-md text-xs text-gray-300">
+                                    <span>{match[1].toUpperCase()}</span>
+                                    <button
+                                        onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), `code-${idx}`)}
+                                        className="text-gray-400 hover:text-white flex items-center gap-1 p-1 rounded hover:bg-gray-600"
+                                    >
+                                        {copiedMessageId === `code-${idx}` ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                                        {copiedMessageId === `code-${idx}` ? 'Copied!' : 'Copy code'}
+                                    </button>
+                                </div>
+                                <SyntaxHighlighter
+                                    style={dark}
+                                    language={match[1]}
+                                    PreTag="pre"
+                                    customStyle={{ background: 'transparent', padding: '10px 0', margin: '0', overflowX: 'auto', maxHeight: '400px' }}
+                                    wrapLines={true}
+                                    {...props}
+                                >
+                                    {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                            </div>
+                          ) : (
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          );
+                        },
+                        a: ({node, ...props}) => <a {...props} className="text-blue-400 hover:underline" />,
+                        p: ({node, ...props}) => <p {...props} className="mb-2 last:mb-0 text-gray-100 leading-relaxed" />,
+                        ul: ({node, ...props}) => <ul {...props} className="list-disc list-inside mb-2 last:mb-0 ml-4" />,
+                        ol: ({node, ...props}) => <ol {...props} className="list-decimal list-inside mb-2 last:mb-0 ml-4" />,
+                        li: ({node, ...props}) => <li {...props} className="mb-1" />,
+                        h1: ({node, ...props}) => <h1 {...props} className="text-2xl font-bold mt-4 mb-2 text-white" />,
+                        h2: ({node, ...props}) => <h2 {...props} className="text-xl font-bold mt-3 mb-2 text-white" />,
+                        h3: ({node, ...props}) => <h3 {...props} className="text-lg font-semibold mt-2 mb-1 text-white" />,
+                        blockquote: ({node, ...props}) => <blockquote {...props} className="border-l-4 border-gray-500 pl-4 italic text-gray-300 my-2" />,
+                        table: ({ node, ...props }) => <table {...props} className="table-auto w-full my-2 text-left border-collapse border border-gray-700" />,
+                        th: ({ node, ...props }) => <th {...props} className="px-4 py-2 border border-gray-700 bg-gray-700 font-semibold" />,
+                        td: ({ node, ...props }) => <td {...props} className="px-4 py-2 border border-gray-700" />,
+                      }}
+                      remarkPlugins={[remarkGfm]}
+                    >
+                      {msg.content}
+                    </ReactMarkdown>
+                    {msg.role === "user" && typeof msg.emotion_score === 'number' && (
+                      <div className="absolute -bottom-2 -left-2 text-sm opacity-70 flex items-center justify-center w-6 h-6 rounded-full bg-gray-700/50 backdrop-blur-sm">
+                        {msg.emotion_score > 0.1 ? (
+                          <Laugh className="text-green-400" size={16} aria-label="Feeling positive" />
+                        ) : msg.emotion_score < -0.1 ? (
+                          <Frown className="text-red-400" size={16} aria-label="Feeling negative" />
+                        ) : null}
+                      </div>
+                    )}
                     <button
                       className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white transition-opacity duration-200"
-                      onClick={() => copyToClipboard(msg.content, idx)}
+                      onClick={() => copyToClipboard(msg.content, `msg-${idx}`)}
                       title="Copy message"
                     >
-                      {copiedMessageId === idx ? (
+                      {copiedMessageId === `msg-${idx}` ? (
                         <Check size={16} className="text-green-400" />
                       ) : (
                         <Copy size={16} />
                       )}
                     </button>
-                  </>
+                  </Fragment>
                 )}
               </div>
             ))}
@@ -324,7 +526,7 @@ export default function Home() {
             className="flex-1 p-3 rounded-full bg-[#1a213a] text-white border border-[#2a304e] focus:outline-none focus:border-blue-500 placeholder-gray-400"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={isLoading}
+            disabled={isLoading || !userPersonalityProfile}
           />
 
           {input.trim() && (
@@ -332,7 +534,7 @@ export default function Home() {
               type="submit"
               className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors duration-200"
               title="Send message"
-              disabled={isLoading}
+              disabled={isLoading || !userPersonalityProfile}
             >
               <Send size={20} />
             </button>
