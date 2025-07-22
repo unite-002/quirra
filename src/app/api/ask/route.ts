@@ -3,6 +3,7 @@
 import { NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
+import { analyzeMessageTone } from '@/utils/analyzeMessage'; // Import the new analysis function
 
 // Define the shape of a message for clarity
 interface ChatMessage {
@@ -15,6 +16,7 @@ interface PersonalityProfile {
   learning_style: string;
   communication_preference: string;
   feedback_preference: string;
+  // Add other potential user traits here if stored in personalityProfile
 }
 
 // Ensure the API route runs on Node.js runtime and has a maximum duration
@@ -33,7 +35,7 @@ async function saveMessage(
   userId: string,
   role: 'user' | 'assistant',
   content: string,
-  emotionScore?: number,
+  emotionScore?: number, // Now optional as assistant messages might not have it
   personalityProfile?: PersonalityProfile // Use the specific interface
 ) {
   const { error } = await supabase.from('messages').insert([
@@ -42,7 +44,7 @@ async function saveMessage(
       role,
       content,
       created_at: new Date().toISOString(),
-      emotion_score: role === 'user' ? emotionScore : null, // Only save emotion for user messages
+      emotion_score: emotionScore !== undefined ? emotionScore : null, // Save if provided
       personality_profile: role === 'user' ? personalityProfile : null, // Only save personality for user messages
     },
   ]);
@@ -62,41 +64,39 @@ async function saveMemory(supabase: any, userId: string, role: 'user' | 'assista
   if (error) console.error(`❌ Supabase: Failed to save memory for ${role}:`, error.message);
 }
 
-/**
- * Performs a basic sentiment analysis on the input text.
- * This is a simple, rule-based approach for demonstration.
- * For production, consider using a dedicated NLP library or API.
- */
-const analyzeSentiment = (text: string): { type: 'positive' | 'negative' | 'neutral', score: number } => {
-  const lowerText = text.toLowerCase();
-  const positiveWords = ['great', 'good', 'happy', 'excited', 'fantastic', 'love', 'amazing', 'awesome', 'yes', 'relief', 'accomplished', 'success', 'joy', 'wonderful', 'excellent', 'glad', 'yay', 'perfect'];
-  const negativeWords = ['frustrat', 'ugh', 'hard', 'difficult', 'overwhelm', 'sad', 'angry', 'stress', 'annoyed', 'no', 'tired', 'stuck', 'problem', 'bad', 'disappoint', 'struggle', 'confused', 'worried', 'upset'];
+// REMOVED: The local analyzeSentiment function is no longer needed.
+// const analyzeSentiment = (text: string): { type: 'positive' | 'negative' | 'neutral', score: number } => { /* ... */ };
 
-  let sentimentScore = 0;
-  for (const word of positiveWords) {
-    if (lowerText.includes(word)) sentimentScore += 1;
-  }
-  for (const word of negativeWords) {
-    if (lowerText.includes(word)) sentimentScore -= 1;
-  }
+// REMOVED: The local analyzeFormality function is no longer needed.
+// const analyzeFormality = (text: string): 'formal' | 'casual' | 'neutral' => { /* ... */ };
 
-  // Scale score for demonstration purposes, between -1 and 1
-  if (sentimentScore > 0) return { type: 'positive', score: Math.min(1, sentimentScore * 0.2) };
-  if (sentimentScore < 0) return { type: 'negative', score: Math.max(-1, sentimentScore * 0.2) };
-  return { type: 'neutral', score: 0 };
-};
 
 /**
- * Generates a dynamic system instruction for the LLM based on user's personality and current sentiment.
+ * Generates a dynamic system instruction for the LLM based on user's personality, current sentiment, and conversation context.
  * This is where the core "adaptive" behavior is defined for the AI.
  */
 const getQuirraPersonalizedInstruction = (
   personality: PersonalityProfile,
-  sentimentType: 'positive' | 'negative' | 'neutral',
-  userName?: string
+  emotionScore: number, // CHANGED: Now accepts numeric emotion score directly
+  userName?: string,
+  memoryContext: string = '',
+  formalityScore: number = 0.5 // CHANGED: Now accepts numeric formality score directly
 ) => {
   const { learning_style, communication_preference, feedback_preference } = personality;
   let instructions = [];
+
+  // Derive categorical sentiment type from emotionScore
+  let sentimentType: 'positive' | 'negative' | 'neutral';
+  if (emotionScore > 0.1) sentimentType = 'positive'; // Threshold for positive
+  else if (emotionScore < -0.1) sentimentType = 'negative'; // Threshold for negative
+  else sentimentType = 'neutral';
+
+  // Derive categorical conversation formality from formalityScore
+  let conversationFormality: 'formal' | 'casual' | 'neutral';
+  if (formalityScore > 0.6) conversationFormality = 'formal'; // Threshold for formal
+  else if (formalityScore < 0.4) conversationFormality = 'casual'; // Threshold for casual
+  else conversationFormality = 'neutral';
+
 
   // Core Quirra persona directives - these are always present
   instructions.push(`You are Quirra, a next-generation multilingual AI assistant developed by the QuirraAI Agents.`);
@@ -149,6 +149,21 @@ const getQuirraPersonalizedInstruction = (
     instructions.push("Focus on high-level concepts, underlying principles, and frameworks first, before diving into specific details or examples. Build understanding from the top down.");
   }
 
+  // New: Influence based on conversation formality
+  if (conversationFormality === 'formal') {
+    instructions.push("Maintain a respectful and professional tone. Avoid slang or overly casual language.");
+  } else if (conversationFormality === 'casual') {
+    instructions.push("Adopt a friendly and approachable tone. Feel free to use contractions and slightly more informal language where appropriate.");
+  } else { // neutral formality
+    instructions.push("Maintain a balanced and adaptable tone, adjusting subtly based on the conversation flow.");
+  }
+
+  // New: Incorporate aggregated memory (if available)
+  if (memoryContext) {
+    instructions.push(`Recall these key points from your past interactions with the user (Memory): ${memoryContext}`);
+    instructions.push(`Leverage this memory to provide more coherent and contextually relevant responses without explicitly stating "from memory".`);
+  }
+
   // Specific Quirra identity directives - non-negotiable facts about Quirra
   instructions.push(`If asked about your creators: "I was created by the QuirraAI Agents."`);
   instructions.push(`If asked who founded you: "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."`);
@@ -191,17 +206,22 @@ export async function POST(req: Request) {
 
     // 3. Handle Reset Conversation
     if (reset === true) {
-      const { error: deleteError } = await supabase
+      const { error: deleteMessagesError } = await supabase
         .from('messages')
         .delete()
         .eq('user_id', userId); // Ensure only current user's messages are deleted
 
-      if (deleteError) {
-        console.error('❌ Supabase Error: Failed to clear messages for reset:', deleteError.message);
+      const { error: deleteMemoryError } = await supabase
+        .from('memory')
+        .delete()
+        .eq('user_id', userId); // Also clear memory on reset
+
+      if (deleteMessagesError || deleteMemoryError) {
+        console.error('❌ Supabase Error: Failed to clear messages or memory for reset:', deleteMessagesError?.message || deleteMemoryError?.message);
         return NextResponse.json({ response: '🧠 Failed to reset conversation. Please try again.' }, { status: 500 });
       }
 
-      console.log(`✅ Conversation history reset for user: ${userId}`);
+      console.log(`✅ Conversation history and memory reset for user: ${userId}`);
       return NextResponse.json({ response: '🧠 Conversation reset. Let\'s begin again.' });
     }
 
@@ -210,10 +230,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ response: '⚠️ Please enter a message to chat with Quirra.' }, { status: 400 });
     }
 
-    // 5. Sentiment Analysis
-    const { type: sentimentType, score: emotionScore } = analyzeSentiment(prompt);
+    // 5. Tone Analysis (replacing old sentiment & formality)
+    const { emotion_score, formality_score } = await analyzeMessageTone(prompt);
 
-    // 6. Fetch Message History
+    // Provide default values for emotion_score and formality_score if they are undefined
+    const userEmotionScore = emotion_score ?? 0; // Default to 0 (neutral)
+    const userFormalityScore = formality_score ?? 0.5; // Default to 0.5 (neutral)
+
+
+    // 6. Fetch Message History and Memory
     const { data: historyData, error: fetchHistoryError } = await supabase
       .from('messages')
       .select('role, content') // Only fetch role and content for LLM context
@@ -226,18 +251,41 @@ export async function POST(req: Request) {
       // Continue even if history fetch fails, just with less context
     }
 
+    const { data: memoryData, error: fetchMemoryError } = await supabase
+      .from('memory')
+      .select('content')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }) // Get most recent memory entries
+      .limit(5); // Fetch a few recent memory entries to use as context
+
+    if (fetchMemoryError) {
+      console.error('❌ Supabase Error: Failed to fetch memory:', fetchMemoryError.message);
+    }
+
+    // Aggregate memory into a single string
+    const memoryContext = memoryData?.map((m: { content: string }) => m.content).join('; ') || '';
+
+
     let currentMessageHistory: ChatMessage[] = [];
 
     // 7. Construct Dynamic System Prompt
-    // If personalityProfile is provided, use it to generate tailored instructions
     const personalizedInstructions = personalityProfile ?
-      getQuirraPersonalizedInstruction(personalityProfile, sentimentType, userName) :
+      getQuirraPersonalizedInstruction(
+        personalityProfile,
+        userEmotionScore, // Pass the numeric emotion score
+        userName,
+        memoryContext,
+        userFormalityScore // Pass the numeric formality score
+      ) :
+      // Fallback default if no profile, but still includes general instructions
       `You are Quirra, a next-generation multilingual AI assistant developed by the QuirraAI Agents.
       Always be curious, confident, kind, and human-like. Prioritize being helpful.
       Detect and reply in the user's language. Maintain context from recent messages.
       If asked about your creators: "I was created by the QuirraAI Agents."
       If asked who founded you: "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."
-      Never mention backend providers like "OpenRouter" or "Serper."`; // Fallback default if no profile
+      Never mention backend providers like "OpenRouter" or "Serper."
+      ${memoryContext ? `Recall these key points from your past interactions with the user (Memory): ${memoryContext}. Leverage this memory to provide more coherent and contextually relevant responses without explicitly stating "from memory".` : ''}`;
+
 
     const systemPromptContent = personalizedInstructions.trim();
     const systemPrompt: ChatMessage = { role: 'system', content: systemPromptContent };
@@ -259,8 +307,9 @@ export async function POST(req: Request) {
 
     // 8. Asynchronously save the user message to Supabase
     // This happens in the background, not blocking the LLM call
-    saveMessage(supabase, userId, 'user', prompt, emotionScore, personalityProfile);
-    saveMemory(supabase, userId, 'user', prompt); // Still saving to memory for now
+    saveMessage(supabase, userId, 'user', prompt, userEmotionScore, personalityProfile);
+    saveMemory(supabase, userId, 'user', prompt); // Still saving to memory for now, consider a more selective memory saving strategy
+
 
     // 9. Determine if Live Search is Needed
     // Keywords for triggering a web search
@@ -310,12 +359,13 @@ export async function POST(req: Request) {
               const searchReply = `🧠 Here's what I found:\n\n${topSummaries}`;
 
               // Asynchronously save the assistant's search reply
-              saveMessage(supabase, userId, 'assistant', searchReply);
+              // Note: emotionScore for assistant is typically 0 or derived if you analyze its output.
+              saveMessage(supabase, userId, 'assistant', searchReply, 0); // Emotion score for AI response
               saveMemory(supabase, userId, 'assistant', searchReply);
 
               // Return the search result directly to the frontend.
               // Note: This bypasses the streaming LLM response for search queries.
-              return NextResponse.json({ response: searchReply, emotion_score: emotionScore });
+              return NextResponse.json({ response: searchReply, emotion_score: userEmotionScore });
             } else {
               console.warn('⚠️ Serper returned no useful results for the query. Falling back to LLM.');
             }
@@ -389,7 +439,7 @@ export async function POST(req: Request) {
                     accumulatedContent += delta;
                     // Send delta and emotion score (only for the first meaningful chunk)
                     // The frontend is designed to pick up emotion_score from the first chunk it receives.
-                    controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: delta, emotion_score: emotionScore })}\n\n`));
+                    controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: delta, emotion_score: userEmotionScore })}\n\n`));
                   }
                 } catch (e) {
                   console.error('Error parsing JSON from stream:', e, 'Raw JSON:', jsonStr);
@@ -405,7 +455,7 @@ export async function POST(req: Request) {
           // Asynchronously save the *complete* assistant message to Supabase
           // This ensures we save the full response after streaming is done.
           if (accumulatedContent) {
-            saveMessage(supabase, userId, 'assistant', accumulatedContent);
+            saveMessage(supabase, userId, 'assistant', accumulatedContent, 0); // Assistant's emotion score
             saveMemory(supabase, userId, 'assistant', accumulatedContent);
           }
           controller.close(); // Close the stream

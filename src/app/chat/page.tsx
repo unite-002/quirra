@@ -16,7 +16,11 @@ import {
   RotateCcw,
   Laugh,
   Frown,
-} from "lucide-react"; // Ensure lucide-react is installed: npm install lucide-react
+  Meh, // For neutral emotion
+  Sparkles, // For a "Quirra is thinking" animation or general flair
+  ThumbsUp,
+  ThumbsDown,
+} from "lucide-react";
 import { PersonalityOnboarding } from "@/components/PersonalityOnboarding"; // Your updated onboarding component
 
 // For Markdown rendering and Syntax Highlighting
@@ -26,12 +30,11 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { dark } from 'react-syntax-highlighter/dist/cjs/styles/prism'; // A dark theme for code blocks
 
 // Define the specific props for the custom 'code' component passed to ReactMarkdown
-// IMPORTANT FIX: Make children optional to align with react-markdown's internal types
 interface CodeProps {
   inline?: boolean;
   className?: string;
-  children?: React.ReactNode; // <--- CHANGED TO OPTIONAL
-  node?: any; // `node` is also passed by react-markdown, typing it as 'any' for simplicity here
+  children?: React.ReactNode;
+  node?: any;
 }
 
 // Define the shape of ChatMessage and PersonalityProfile for type safety
@@ -40,6 +43,7 @@ type ChatMessage = {
   content: string;
   emotion_score?: number; // Detected emotion from API for user messages
   personality_profile?: Record<string, string>; // User's profile, saved with user messages (historical)
+  id: string; // Add a unique ID for each message for better keying and copying
 };
 
 interface PersonalityProfile {
@@ -128,6 +132,7 @@ export default function Home() {
           content: msg.content,
           emotion_score: msg.emotion_score,
           personality_profile: msg.personality_profile,
+          id: crypto.randomUUID(), // Assign a new ID for client-side use
         }));
         setMessages(chatData);
       }
@@ -149,11 +154,12 @@ export default function Home() {
 
     setIsLoading(true);
 
-    const userMessage: ChatMessage = { role: "user", content: input };
+    const userMessage: ChatMessage = { role: "user", content: input, id: crypto.randomUUID() };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
 
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+    // Add a placeholder for the assistant's response
+    setMessages((prev) => [...prev, { role: "assistant", content: "", id: crypto.randomUUID() }]);
 
     let accumulatedAssistantResponse = "";
     let detectedEmotionScore: number | undefined;
@@ -198,7 +204,7 @@ export default function Home() {
             try {
               const data = JSON.parse(jsonStr);
               if (typeof data.emotion_score === 'number' && detectedEmotionScore === undefined) {
-                  detectedEmotionScore = data.emotion_score;
+                detectedEmotionScore = data.emotion_score;
               }
               const deltaContent = data.content || '';
               accumulatedAssistantResponse += deltaContent;
@@ -223,10 +229,10 @@ export default function Home() {
         const updatedMessages = [...prev];
         const lastUserMessageIndex = updatedMessages.findLastIndex(msg => msg.role === 'user');
         if (lastUserMessageIndex !== -1 && detectedEmotionScore !== undefined) {
-            updatedMessages[lastUserMessageIndex] = {
-                ...updatedMessages[lastUserMessageIndex],
-                emotion_score: detectedEmotionScore
-            };
+          updatedMessages[lastUserMessageIndex] = {
+            ...updatedMessages[lastUserMessageIndex],
+            emotion_score: detectedEmotionScore
+          };
         }
         return updatedMessages;
       });
@@ -235,12 +241,14 @@ export default function Home() {
       console.error("❌ Chat error:", err.message);
       setMessages((prev) => {
         const updatedMessages = [...prev];
-        if (updatedMessages.length > 0 && updatedMessages[updatedMessages.length - 1]?.content === "") {
-            updatedMessages.pop();
+        // Remove the temporary assistant message if it's empty
+        if (updatedMessages.length > 0 && updatedMessages[updatedMessages.length - 1]?.content === "" && updatedMessages[updatedMessages.length - 1]?.role === "assistant") {
+          updatedMessages.pop();
         }
         updatedMessages.push({
           role: "assistant",
           content: `⚠️ Failed to get a response from Quirra. ${err.message}. Please try again.`,
+          id: crypto.randomUUID(),
         });
         return updatedMessages;
       });
@@ -274,9 +282,8 @@ export default function Home() {
 
   // --- Handler for starting a new chat (client-side only for now) ---
   const handleNewChat = () => {
-    if (isLoading) return;
-    setMessages([]);
-    setIsSidebarOpen(false);
+    // Before starting a new chat, also trigger a server-side reset
+    handleReset();
   };
 
   // --- Handler for user logout ---
@@ -292,6 +299,8 @@ export default function Home() {
       setTimeout(() => setCopiedMessageId(null), 2000);
     } catch (err) {
       console.error("📋 Copy failed", err);
+      // Optionally, provide a more user-friendly error message
+      alert("Failed to copy text. Please try again or copy manually.");
     }
   };
 
@@ -313,6 +322,11 @@ export default function Home() {
       </div>
     );
   }
+
+  // Custom component for markdown links to open in new tabs
+  const LinkRenderer = ({ node, ...props }: { node?: any; [key: string]: any }) => {
+    return <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />;
+  };
 
   // --- Main Chat UI (rendered after initial loading and onboarding are complete) ---
   return (
@@ -363,11 +377,23 @@ export default function Home() {
             </div>
           )}
           {userPersonalityProfile && (
-            <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-left text-gray-400 text-sm">
-                <p className="text-xs">
-                  Style: <span className="text-gray-200 capitalize">{userPersonalityProfile.learning_style || 'N/A'}</span>,
-                  Comm: <span className="text-gray-200 capitalize">{userPersonalityProfile.communication_preference || 'N/A'}</span>
-                </p>
+            <div className="flex flex-col gap-1 px-4 py-2 rounded-lg text-left text-gray-400 text-sm">
+              <p>
+                **Learning:** <span className="text-gray-200 capitalize">{userPersonalityProfile.learning_style.replace(/_/g, ' ')}</span>
+              </p>
+              <p>
+                **Communication:** <span className="text-gray-200 capitalize">{userPersonalityProfile.communication_preference.replace(/_/g, ' ')}</span>
+              </p>
+              <p>
+                **Feedback:** <span className="text-gray-200 capitalize">{userPersonalityProfile.feedback_preference.replace(/_/g, ' ')}</span>
+              </p>
+              {/* Optional: Add an "Edit Preferences" button */}
+              <button
+                onClick={() => setUserPersonalityProfile(null)} // This will trigger the onboarding again
+                className="text-blue-400 hover:underline text-xs self-end mt-1"
+              >
+                Edit Preferences
+              </button>
             </div>
           )}
 
@@ -421,21 +447,39 @@ export default function Home() {
           {messages.length === 0 && (
             <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 text-3xl font-semibold animate-fadeIn">
               How can I help you today?
+              <Sparkles className="mt-4 text-blue-400 animate-pulse" size={36} />
             </div>
           )}
 
-          <div className="flex flex-col gap-4">
-            {messages.map((msg, idx) => (
+          <div className="flex flex-col gap-6"> {/* Increased gap for better spacing */}
+            {messages.map((msg) => (
               <div
-                key={idx}
-                className={`group relative rounded-xl px-4 py-3 max-w-[90%] text-base break-words ${
+                key={msg.id} // Use msg.id for key
+                className={`group relative rounded-xl px-4 py-3 max-w-[90%] text-base break-words animate-fadeIn ${
                   msg.role === "user"
                     ? "bg-blue-600 text-white self-end rounded-br-none"
                     : "bg-[#1a213a] text-white self-start rounded-bl-none shadow-md border border-[#2a304e]"
                 }`}
               >
+                {/* User message emotion cue */}
+                {msg.role === "user" && typeof msg.emotion_score === 'number' && (
+                  <div className="absolute -bottom-2 -left-2 text-sm opacity-90 flex items-center justify-center w-6 h-6 rounded-full bg-gray-700/70 backdrop-blur-sm shadow-md border border-gray-600">
+                    {msg.emotion_score > 0.1 ? (
+                      <Laugh className="text-green-400" size={16} aria-label="Feeling positive" />
+                    ) : msg.emotion_score < -0.1 ? (
+                      <Frown className="text-red-400" size={16} aria-label="Feeling negative" />
+                    ) : (
+                      <Meh className="text-yellow-400" size={16} aria-label="Feeling neutral" />
+                    )}
+                  </div>
+                )}
+
+                {/* Assistant thinking indicator */}
                 {msg.role === "assistant" && msg.content === "" && isLoading ? (
-                  <span className="animate-typing-dots text-lg">. . .</span>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="animate-bounce text-blue-400" size={20} />
+                    <span className="animate-typing-dots text-lg">Quirra is thinking...</span>
+                  </div>
                 ) : (
                   <Fragment>
                     <ReactMarkdown
@@ -443,43 +487,43 @@ export default function Home() {
                         code({ node, inline, className, children, ...props }: CodeProps) {
                           const match = /language-(\w+)/.exec(className || '');
                           return !inline && match ? (
-                            <div className="relative rounded-md bg-gray-800 p-2 font-mono text-sm my-2 overflow-x-auto">
-                                <div className="flex justify-between items-center px-2 py-1 bg-gray-700 rounded-t-md text-xs text-gray-300">
-                                    <span>{match[1].toUpperCase()}</span>
-                                    <button
-                                        onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), `code-${idx}`)}
-                                        className="text-gray-400 hover:text-white flex items-center gap-1 p-1 rounded hover:bg-gray-600"
-                                    >
-                                        {copiedMessageId === `code-${idx}` ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                                        {copiedMessageId === `code-${idx}` ? 'Copied!' : 'Copy code'}
-                                    </button>
-                                </div>
-                                <SyntaxHighlighter
-                                    style={dark}
-                                    language={match[1]}
-                                    PreTag="pre"
-                                    customStyle={{ background: 'transparent', padding: '10px 0', margin: '0', overflowX: 'auto', maxHeight: '400px' }}
-                                    wrapLines={true}
-                                    {...props}
+                            <div className="relative rounded-md bg-gray-800 p-2 font-mono text-sm my-2 overflow-x-auto shadow-inner">
+                              <div className="flex justify-between items-center px-2 py-1 bg-gray-700 rounded-t-md text-xs text-gray-300">
+                                <span>{match[1].toUpperCase()}</span>
+                                <button
+                                  onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), `code-${msg.id}`)}
+                                  className="text-gray-400 hover:text-white flex items-center gap-1 p-1 rounded hover:bg-gray-600 transition-colors"
                                 >
-                                    {String(children).replace(/\n$/, '')}
-                                </SyntaxHighlighter>
+                                  {copiedMessageId === `code-${msg.id}` ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                                  {copiedMessageId === `code-${msg.id}` ? 'Copied!' : 'Copy code'}
+                                </button>
+                              </div>
+                              <SyntaxHighlighter
+                                style={dark}
+                                language={match[1]}
+                                PreTag="pre"
+                                customStyle={{ background: 'transparent', padding: '10px 0', margin: '0', overflowX: 'auto', maxHeight: '400px' }}
+                                wrapLines={true}
+                                {...props}
+                              >
+                                {String(children).replace(/\n$/, '')}
+                              </SyntaxHighlighter>
                             </div>
                           ) : (
-                            <code className={className} {...props}>
+                            <code className={`${className} bg-gray-700/50 px-1 py-0.5 rounded text-sm font-mono`} {...props}>
                               {children}
                             </code>
                           );
                         },
-                        a: ({node, ...props}) => <a {...props} className="text-blue-400 hover:underline" />,
-                        p: ({node, ...props}) => <p {...props} className="mb-2 last:mb-0 text-gray-100 leading-relaxed" />,
-                        ul: ({node, ...props}) => <ul {...props} className="list-disc list-inside mb-2 last:mb-0 ml-4" />,
-                        ol: ({node, ...props}) => <ol {...props} className="list-decimal list-inside mb-2 last:mb-0 ml-4" />,
-                        li: ({node, ...props}) => <li {...props} className="mb-1" />,
-                        h1: ({node, ...props}) => <h1 {...props} className="text-2xl font-bold mt-4 mb-2 text-white" />,
-                        h2: ({node, ...props}) => <h2 {...props} className="text-xl font-bold mt-3 mb-2 text-white" />,
-                        h3: ({node, ...props}) => <h3 {...props} className="text-lg font-semibold mt-2 mb-1 text-white" />,
-                        blockquote: ({node, ...props}) => <blockquote {...props} className="border-l-4 border-gray-500 pl-4 italic text-gray-300 my-2" />,
+                        a: LinkRenderer, // Use the custom LinkRenderer
+                        p: ({ node, ...props }) => <p {...props} className="mb-2 last:mb-0 text-gray-100 leading-relaxed" />,
+                        ul: ({ node, ...props }) => <ul {...props} className="list-disc list-inside mb-2 last:mb-0 ml-4" />,
+                        ol: ({ node, ...props }) => <ol {...props} className="list-decimal list-inside mb-2 last:mb-0 ml-4" />,
+                        li: ({ node, ...props }) => <li {...props} className="mb-1" />,
+                        h1: ({ node, ...props }) => <h1 {...props} className="text-2xl font-bold mt-4 mb-2 text-white" />,
+                        h2: ({ node, ...props }) => <h2 {...props} className="text-xl font-bold mt-3 mb-2 text-white" />,
+                        h3: ({ node, ...props }) => <h3 {...props} className="text-lg font-semibold mt-2 mb-1 text-white" />,
+                        blockquote: ({ node, ...props }) => <blockquote {...props} className="border-l-4 border-gray-500 pl-4 italic text-gray-300 my-2" />,
                         table: ({ node, ...props }) => <table {...props} className="table-auto w-full my-2 text-left border-collapse border border-gray-700" />,
                         th: ({ node, ...props }) => <th {...props} className="px-4 py-2 border border-gray-700 bg-gray-700 font-semibold" />,
                         td: ({ node, ...props }) => <td {...props} className="px-4 py-2 border border-gray-700" />,
@@ -488,26 +532,29 @@ export default function Home() {
                     >
                       {msg.content}
                     </ReactMarkdown>
-                    {msg.role === "user" && typeof msg.emotion_score === 'number' && (
-                      <div className="absolute -bottom-2 -left-2 text-sm opacity-70 flex items-center justify-center w-6 h-6 rounded-full bg-gray-700/50 backdrop-blur-sm">
-                        {msg.emotion_score > 0.1 ? (
-                          <Laugh className="text-green-400" size={16} aria-label="Feeling positive" />
-                        ) : msg.emotion_score < -0.1 ? (
-                          <Frown className="text-red-400" size={16} aria-label="Feeling negative" />
-                        ) : null}
-                      </div>
-                    )}
+                    {/* Copy button for all messages */}
                     <button
                       className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white transition-opacity duration-200"
-                      onClick={() => copyToClipboard(msg.content, `msg-${idx}`)}
+                      onClick={() => copyToClipboard(msg.content, `msg-${msg.id}`)}
                       title="Copy message"
                     >
-                      {copiedMessageId === `msg-${idx}` ? (
+                      {copiedMessageId === `msg-${msg.id}` ? (
                         <Check size={16} className="text-green-400" />
                       ) : (
                         <Copy size={16} />
                       )}
                     </button>
+                    {/* "Was this helpful?" feedback for assistant messages */}
+                    {msg.role === "assistant" && msg.content !== "" && (
+                      <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <button className="p-1 rounded-full bg-gray-700 text-gray-300 hover:text-green-400 transition-colors" title="Helpful">
+                          <ThumbsUp size={16} />
+                        </button>
+                        <button className="p-1 rounded-full bg-gray-700 text-gray-300 hover:text-red-400 transition-colors" title="Not helpful">
+                          <ThumbsDown size={16} />
+                        </button>
+                      </div>
+                    )}
                   </Fragment>
                 )}
               </div>
@@ -529,14 +576,14 @@ export default function Home() {
             disabled={isLoading || !userPersonalityProfile}
           />
 
-          {input.trim() && (
+          {(input.trim() || isLoading) && ( // Show send button if there's input or if loading
             <button
               type="submit"
               className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors duration-200"
               title="Send message"
-              disabled={isLoading || !userPersonalityProfile}
+              disabled={isLoading || !userPersonalityProfile || !input.trim()} // Disable if no input for actual sending
             >
-              <Send size={20} />
+              {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
             </button>
           )}
         </form>
