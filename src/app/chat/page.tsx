@@ -17,11 +17,10 @@ import {
   Laugh,
   Frown,
   Meh, // For neutral emotion
-  // Sparkles, // REMOVED: No longer needed
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react";
-import { PersonalityOnboarding } from "@/components/PersonalityOnboarding"; // Your updated onboarding component
+import { PersonalityOnboarding } from "@/components/PersonalityOnboarding"; // Your onboarding component
 
 // For Markdown rendering and Syntax Highlighting
 import ReactMarkdown from 'react-markdown';
@@ -52,13 +51,24 @@ interface PersonalityProfile {
   feedback_preference: string;
 }
 
+// Define a type for the user's general profile data (username, full name)
+interface UserProfileData {
+  username: string | null;
+  full_name: string | null;
+  preferred_name?: string | null; // Optional, if you add this specifically to your DB
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userName, setUserName] = useState<string | null>(null);
+  // Renamed from userName to displayUserName to be more explicit about its purpose
+  const [displayUserName, setDisplayUserName] = useState<string | null>(null);
+  // New state to hold the specific name to be used by the chatbot (e.g., first name)
+  const [chatbotUserName, setChatbotUserName] = useState<string | null>(null);
+
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -66,81 +76,102 @@ export default function Home() {
 
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  // --- Authentication and History Loading ---
-  useEffect(() => {
-    const checkAuthAndLoadHistory = async () => {
-      setIsInitialLoading(true);
-      const {
-        data: { session },
-        error,
-      } = await supabase.auth.getSession();
+  // --- Authentication and History Loading Function (Moved outside useEffect) ---
+  const checkAuthAndLoadHistory = async () => {
+    setIsInitialLoading(true);
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
 
-      if (error || !session) {
-        router.push("/login");
-        setIsInitialLoading(false);
-        return;
-      }
-
-      if (session.user?.email) {
-        setUserEmail(session.user.email);
-        const namePart = session.user.email.split('@')[0];
-        const formattedName = namePart.replace(/[._]/g, ' ').split(' ')
-          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(' ');
-        setUserName(formattedName);
-      }
-
-      let loadedProfile: PersonalityProfile | null = null;
-      const storedProfile = localStorage.getItem('quirra_personality_profile');
-      if (storedProfile) {
-        try {
-          const parsedProfile: PersonalityProfile = JSON.parse(storedProfile);
-          loadedProfile = parsedProfile;
-        } catch (e) {
-          console.error("Failed to parse personality profile from localStorage", e);
-          localStorage.removeItem('quirra_personality_profile');
-        }
-      }
-
-      if (!loadedProfile) {
-        const { data: profileData, error: profileError } = await supabase
-          .from("user_profiles")
-          .select("personality_profile")
-          .eq('user_id', session.user.id)
-          .single();
-
-        if (profileError && profileError.code !== 'PGRST116') {
-          console.error("❌ Failed to load personality profile from DB:", profileError.message);
-        } else if (profileData && profileData.personality_profile) {
-          loadedProfile = profileData.personality_profile as PersonalityProfile;
-          localStorage.setItem('quirra_personality_profile', JSON.stringify(loadedProfile));
-        }
-      }
-      setUserPersonalityProfile(loadedProfile);
-
-      const { data, error: fetchError } = await supabase
-        .from("messages")
-        .select("role, content, emotion_score, personality_profile")
-        .eq('user_id', session.user.id)
-        .order("created_at", { ascending: true });
-
-      if (fetchError) {
-        console.error("❌ Failed to load history:", fetchError.message);
-      } else {
-        const chatData = data.map((msg: any) => ({
-          role: msg.role,
-          content: msg.content,
-          emotion_score: msg.emotion_score,
-          personality_profile: msg.personality_profile,
-          id: crypto.randomUUID(), // Assign a new ID for client-side use
-        }));
-        setMessages(chatData);
-      }
+    if (error || !session) {
+      router.push("/login");
       setIsInitialLoading(false);
-    };
+      return;
+    }
 
+    const userId = session.user.id;
+    setUserEmail(session.user.email ?? null); // Set email
+
+    // 1. Fetch User Profile Data (including full_name and username)
+    let currentUsername: string | null = null;
+    let currentFullName: string | null = null;
+    let loadedPersonalityProfile: PersonalityProfile | null = null;
+
+    const { data: profileData, error: profileError } = await supabase
+      .from("profiles") // Assuming 'profiles' is your table for user metadata
+      .select("username, full_name, personality_profile") // Select personality_profile too
+      .eq('id', userId)
+      .single();
+
+    if (profileError && profileError.code !== 'PGRST116') {
+      console.error("❌ Failed to load user profile:", profileError.message);
+      // Fallback or show error
+    } else if (profileData) {
+      currentUsername = profileData.username;
+      currentFullName = profileData.full_name;
+      loadedPersonalityProfile = profileData.personality_profile as PersonalityProfile;
+
+      // Store personality profile in localStorage as before
+      if (loadedPersonalityProfile) {
+          localStorage.setItem('quirra_personality_profile', JSON.stringify(loadedPersonalityProfile));
+      } else {
+          localStorage.removeItem('quirra_personality_profile');
+      }
+    }
+
+    // Determine the name to display and the name for the chatbot
+    let resolvedDisplayUserName: string;
+    let resolvedChatbotUserName: string;
+
+    if (currentFullName) {
+      resolvedDisplayUserName = currentFullName;
+      resolvedChatbotUserName = currentFullName.split(' ')[0]; // Use first name from full_name
+    } else if (currentUsername) {
+      resolvedDisplayUserName = currentUsername;
+      resolvedChatbotUserName = currentUsername; // Use username as the chatbot name
+    } else {
+      // Fallback to email part if no full_name or username
+      const namePart = session.user.email?.split('@')[0] || "User";
+      resolvedDisplayUserName = namePart.replace(/[._]/g, ' ').split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+      resolvedChatbotUserName = resolvedDisplayUserName;
+    }
+
+    setDisplayUserName(resolvedDisplayUserName);
+    setChatbotUserName(resolvedChatbotUserName);
+    setUserPersonalityProfile(loadedPersonalityProfile); // Set the personality profile from DB
+
+    // 2. Load Chat History
+    const { data, error: fetchError } = await supabase
+      .from("messages")
+      .select("role, content, emotion_score, personality_profile")
+      .eq('user_id', userId)
+      .order("created_at", { ascending: true });
+
+    if (fetchError) {
+      console.error("❌ Failed to load history:", fetchError.message);
+    } else {
+      const chatData = data.map((msg: any) => ({
+        role: msg.role,
+        content: msg.content,
+        emotion_score: msg.emotion_score,
+        personality_profile: msg.personality_profile,
+        id: crypto.randomUUID(), // Assign a new ID for client-side use
+      }));
+      setMessages(chatData);
+    }
+    setIsInitialLoading(false);
+  };
+
+
+  // --- Authentication and History Loading Effect (calls the function) ---
+  useEffect(() => {
+    // Call the function directly now that it's defined outside
     checkAuthAndLoadHistory();
-  }, [router]);
+  }, [router]); // `checkAuthAndLoadHistory` uses `router`, so include it in dependencies.
+                // State setters are stable and don't need to be added.
 
   // --- Effect to scroll to the bottom of the chat on new messages ---
   useEffect(() => {
@@ -170,7 +201,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: userMessage.content,
-          userName: userName,
+          userName: chatbotUserName, // Pass the chatbot-specific user name
           personalityProfile: userPersonalityProfile,
         }),
       });
@@ -315,10 +346,16 @@ export default function Home() {
   }
 
   // --- Conditional Rendering: Personality Onboarding ---
+  // The PersonalityOnboarding component should also handle initial user name input
   if (!userPersonalityProfile) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
-        <PersonalityOnboarding onComplete={setUserPersonalityProfile} />
+        {/* Onboarding will now also need to trigger a profile re-fetch or pass updated user info back */}
+        <PersonalityOnboarding onComplete={(profile) => {
+            setUserPersonalityProfile(profile);
+            // After onboarding, re-fetch full profile to get potentially updated name
+            checkAuthAndLoadHistory(); // Re-run the auth and history load to get the updated name
+        }} />
       </div>
     );
   }
@@ -366,13 +403,13 @@ export default function Home() {
         </nav>
         <div className="p-4 border-t border-[#1a213a] flex flex-col gap-2">
           {/* User Profile Section */}
-          {userEmail && (
+          {displayUserName && (
             <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-[#1a213a] border border-[#2a304e]">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold text-white">
-                {userName ? userName[0]?.toUpperCase() : userEmail[0]?.toUpperCase()}
+                {displayUserName[0]?.toUpperCase()}
               </div>
               <span className="text-gray-200 text-base overflow-hidden text-ellipsis whitespace-nowrap">
-                {userName || userEmail}
+                {displayUserName}
               </span>
             </div>
           )}
@@ -387,16 +424,8 @@ export default function Home() {
               <p>
                 **Feedback:** <span className="text-gray-200 capitalize">{userPersonalityProfile.feedback_preference.replace(/_/g, ' ')}</span>
               </p>
-              {/* REMOVED: "Edit Preferences" button, as the "Settings" button below covers this */}
-              {/* <button
-                onClick={() => setUserPersonalityProfile(null)} // This would trigger the onboarding again
-                className="text-blue-400 hover:underline text-xs self-end mt-1"
-              >
-                Edit Preferences
-              </button> */}
             </div>
           )}
-
 
           <button
             onClick={() => {
@@ -447,8 +476,6 @@ export default function Home() {
           {messages.length === 0 && (
             <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 text-3xl font-semibold animate-fadeIn">
               How can I help you today?
-              {/* REMOVED: Sparkles logo */}
-              {/* <Sparkles className="mt-4 text-blue-400 animate-pulse" size={36} /> */}
             </div>
           )}
 
@@ -478,7 +505,6 @@ export default function Home() {
                 {/* Assistant thinking indicator */}
                 {msg.role === "assistant" && msg.content === "" && isLoading ? (
                   <div className="flex items-center gap-2">
-                    {/* REPLACED: Sparkles with Loader2 */}
                     <Loader2 className="animate-spin text-blue-400" size={20} />
                     <span className="animate-typing-dots text-lg">Quirra is thinking...</span>
                   </div>

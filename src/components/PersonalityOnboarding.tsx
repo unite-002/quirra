@@ -168,14 +168,16 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
     if (selectedCommunicationPreference) {
       const comm = personalityData.communication_preferences.find(c => c.value === selectedCommunicationPreference);
       if (comm) {
-        tone = comm.tone; // This will override the previous tone if applicable, or combine if logic is more complex
+        // This will override the previous tone if applicable, or combine if logic is more complex
+        tone = comm.tone;
         currentSuggestions.push(...comm.suggestions);
       }
     }
     if (selectedFeedbackPreference) {
       const fb = personalityData.feedback_preferences.find(f => f.value === selectedFeedbackPreference);
       if (fb) {
-        tone = fb.tone; // This will override or combine
+        // This will override or combine
+        tone = fb.tone;
         currentSuggestions.push(...fb.suggestions);
       }
     }
@@ -230,9 +232,12 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
           feedback_preference: selectedFeedbackPreference!,
         };
 
+        // --- CRITICAL CORRECTION HERE ---
+        // Save to the 'profiles' table, using 'id' (which is the user's UUID)
+        // and update the 'personality_profile' JSONB column.
         const { error: dbError } = await supabase
-          .from("user_profiles") // Assuming a table named 'user_profiles'
-          .upsert({ user_id: user.id, personality_profile: profile }, { onConflict: 'user_id' }); // Upsert to update if exists
+          .from("profiles") // Changed from "user_profiles" to "profiles"
+          .upsert({ id: user.id, personality_profile: profile }, { onConflict: 'id' }); // Changed 'user_id' to 'id' for onConflict
 
         if (dbError) {
           console.error("Error saving personality profile:", dbError);
