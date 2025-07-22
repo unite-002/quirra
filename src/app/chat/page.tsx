@@ -10,14 +10,14 @@ import {
   MessageSquarePlus,
   Copy,
   Send,
-  Loader2,
+  Loader2, // Will be used for thinking indicator
   LogOut,
   Check,
   RotateCcw,
   Laugh,
   Frown,
   Meh, // For neutral emotion
-  Sparkles, // For a "Quirra is thinking" animation or general flair
+  // Sparkles, // REMOVED: No longer needed
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react";
@@ -387,13 +387,13 @@ export default function Home() {
               <p>
                 **Feedback:** <span className="text-gray-200 capitalize">{userPersonalityProfile.feedback_preference.replace(/_/g, ' ')}</span>
               </p>
-              {/* Optional: Add an "Edit Preferences" button */}
-              <button
-                onClick={() => setUserPersonalityProfile(null)} // This will trigger the onboarding again
+              {/* REMOVED: "Edit Preferences" button, as the "Settings" button below covers this */}
+              {/* <button
+                onClick={() => setUserPersonalityProfile(null)} // This would trigger the onboarding again
                 className="text-blue-400 hover:underline text-xs self-end mt-1"
               >
                 Edit Preferences
-              </button>
+              </button> */}
             </div>
           )}
 
@@ -447,7 +447,8 @@ export default function Home() {
           {messages.length === 0 && (
             <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 text-3xl font-semibold animate-fadeIn">
               How can I help you today?
-              <Sparkles className="mt-4 text-blue-400 animate-pulse" size={36} />
+              {/* REMOVED: Sparkles logo */}
+              {/* <Sparkles className="mt-4 text-blue-400 animate-pulse" size={36} /> */}
             </div>
           )}
 
@@ -477,7 +478,8 @@ export default function Home() {
                 {/* Assistant thinking indicator */}
                 {msg.role === "assistant" && msg.content === "" && isLoading ? (
                   <div className="flex items-center gap-2">
-                    <Sparkles className="animate-bounce text-blue-400" size={20} />
+                    {/* REPLACED: Sparkles with Loader2 */}
+                    <Loader2 className="animate-spin text-blue-400" size={20} />
                     <span className="animate-typing-dots text-lg">Quirra is thinking...</span>
                   </div>
                 ) : (
