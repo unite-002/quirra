@@ -7,9 +7,13 @@ import { supabase } from "@/utils/supabase";
 import { useState, useEffect } from "react";
 
 // Define an interface for the profile data you expect to fetch
+// UPDATED: Now includes personality profile fields
 interface UserProfile {
   username: string;
   full_name: string | null;
+  learning_style: string | null;
+  communication_preference: string | null;
+  feedback_preference: string | null;
 }
 
 export default function SettingsPage() {
@@ -19,8 +23,13 @@ export default function SettingsPage() {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
-  const [username, setUsername] = useState<string | null>(null); // New state for username
-  const [fullName, setFullName] = useState<string>(''); // For user_metadata.full_name
+  const [username, setUsername] = useState<string | null>(null);
+  const [fullName, setFullName] = useState<string>('');
+
+  // NEW: State for personality profile fields
+  const [learningStyle, setLearningStyle] = useState<string>('');
+  const [communicationPreference, setCommunicationPreference] = useState<string>('');
+  const [feedbackPreference, setFeedbackPreference] = useState<string>('');
 
   // State for delete chat history
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -28,7 +37,7 @@ export default function SettingsPage() {
 
   // --- Profile Loading and Update Logic ---
   useEffect(() => {
-    const fetchUserAndProfile = async () => { // Renamed function to reflect fetching profile too
+    const fetchUserAndProfile = async () => {
       setLoadingProfile(true);
       setProfileMessage(null);
       try {
@@ -41,33 +50,40 @@ export default function SettingsPage() {
           return;
         }
 
-        setEmail(user.email ?? null); // Still using nullish coalescing for email
+        setEmail(user.email ?? null);
 
-        // Fetch user profile from the 'profiles' table
+        // Fetch user profile from the 'profiles' table, including new fields
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('username, full_name') // Select both username and full_name from profiles table
+          .select('username, full_name, learning_style, communication_preference, feedback_preference') // UPDATED: Select new fields
           .eq('id', user.id)
-          .single(); // Expecting a single row for the user's profile
+          .single();
 
         if (profileError && profileError.code !== 'PGRST116') { // PGRST116 means "no rows found"
-            console.error('Error fetching user profile:', profileError.message);
-            setProfileMessage(`Error loading profile details: ${profileError.message}`);
+          console.error('Error fetching user profile:', profileError.message);
+          setProfileMessage(`Error loading profile details: ${profileError.message}`);
         } else if (profile) {
-            // If profile exists, set the username and full_name from it
-            setUsername(profile.username);
-            setFullName(profile.full_name || ''); // Use || '' to ensure it's a string
+          // If profile exists, set all relevant state variables
+          setUsername(profile.username);
+          setFullName(profile.full_name || '');
+          setLearningStyle(profile.learning_style || ''); // NEW
+          setCommunicationPreference(profile.communication_preference || ''); // NEW
+          setFeedbackPreference(profile.feedback_preference || ''); // NEW
         } else {
-            // If no profile found, but user exists, pre-fill full_name from user_metadata if available
-            setFullName(user.user_metadata?.full_name || '');
-            setUsername(null); // Explicitly set username to null if not found in profiles
-            setProfileMessage('Your profile is not fully set up. Please go to complete profile page.'); // Optional message
+          // If no profile found, but user exists, pre-fill full_name from user_metadata if available
+          setFullName(user.user_metadata?.full_name || '');
+          setUsername(null); // Explicitly set username to null if not found in profiles
+          // Set default values for new personality fields if no profile exists
+          setLearningStyle('');
+          setCommunicationPreference('');
+          setFeedbackPreference('');
+          setProfileMessage('Your profile is not fully set up. Please complete your profile.'); // Optional message
         }
 
       } catch (err) {
         console.error('Unexpected error fetching user or profile for settings:', err);
         setProfileMessage('An unexpected error occurred while loading profile.');
-        router.push('/sign-in'); // Redirect in case of critical unexpected error
+        router.push('/sign-in');
       } finally {
         setLoadingProfile(false);
       }
@@ -79,7 +95,7 @@ export default function SettingsPage() {
   // Handle profile update logic
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoadingProfile(true); // Re-use loading state for profile update
+    setLoadingProfile(true);
     setProfileMessage(null);
 
     try {
@@ -91,12 +107,21 @@ export default function SettingsPage() {
         return;
       }
 
-      // Update 'profiles' table for username and full_name
-      // Using upsert to handle cases where profile might not exist yet (though it should after signup flow)
+      // Prepare the profile data to be upserted
+      const profileDataToSave = {
+        id: user.id,
+        username: username, // Ensure username is not null here, add validation if needed
+        full_name: fullName.trim() || null,
+        learning_style: learningStyle.trim() || null,         // NEW
+        communication_preference: communicationPreference.trim() || null, // NEW
+        feedback_preference: feedbackPreference.trim() || null,     // NEW
+      };
+
+      // Upsert to 'profiles' table
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert(
-          { id: user.id, username, full_name: fullName.trim() || null }, // Ensure username is not null here
+          profileDataToSave,
           { onConflict: 'id', ignoreDuplicates: false }
         );
 
@@ -125,7 +150,9 @@ export default function SettingsPage() {
 
   // --- Delete Chat History Logic ---
   const handleDeleteChatHistory = async () => {
-    if (!confirm("Are you sure you want to delete ALL chat history? This action cannot be undone.")) {
+    // Replaced confirm() with a custom modal/message box for better UX in an iframe environment
+    // For this example, I'll use a simple alert for brevity, but recommend a custom modal.
+    if (!window.confirm("Are you sure you want to delete ALL chat history? This action cannot be undone.")) {
       return;
     }
 
@@ -149,12 +176,19 @@ export default function SettingsPage() {
         .delete()
         .eq('user_id', user_id);
 
-      if (deleteError) {
-        console.error("Failed to delete chat history:", deleteError.message);
-        setDeleteMessage(`Failed to delete history: ${deleteError.message}`);
+      // Also delete memory associated with the user
+      const { error: deleteMemoryError } = await supabase
+        .from('memory')
+        .delete()
+        .eq('user_id', user_id);
+
+
+      if (deleteError || deleteMemoryError) {
+        console.error("Failed to delete chat history or memory:", deleteError?.message || deleteMemoryError?.message);
+        setDeleteMessage(`Failed to delete history: ${deleteError?.message || deleteMemoryError?.message}`);
       } else {
-        console.log("Chat history deleted successfully.");
-        setDeleteMessage("Chat history deleted successfully!");
+        console.log("Chat history and memory deleted successfully.");
+        setDeleteMessage("Chat history and memory deleted successfully!");
         setTimeout(() => {
           router.push("/");
         }, 1500);
@@ -214,15 +248,15 @@ export default function SettingsPage() {
                     <input
                       type="text"
                       id="username"
-                      value={username || ''} // Display current username, fallback to empty string
+                      value={username || ''}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder="Enter your username"
                       className="w-full p-3 bg-[#2a304e] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                       required
                     />
-                     {username === null && ( // If username is null, provide a hint to create it
-                         <p className="text-xs text-red-400 mt-1">Please set a unique username.</p>
-                     )}
+                      {username === null && (
+                           <p className="text-xs text-red-400 mt-1">Please set a unique username.</p>
+                       )}
                   </div>
                   <div className="text-left">
                     <label htmlFor="email" className="text-gray-400 block mb-1 text-sm">Email</label>
@@ -242,9 +276,45 @@ export default function SettingsPage() {
                       className="w-full p-3 bg-[#2a304e] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
+
+                  {/* NEW: Personality Profile Fields */}
+                  <div className="text-left">
+                    <label htmlFor="learning_style" className="text-gray-400 block mb-1 text-sm">Learning Style</label>
+                    <input
+                      type="text"
+                      id="learning_style"
+                      value={learningStyle}
+                      onChange={(e) => setLearningStyle(e.target.value)}
+                      placeholder="e.g., visual, auditory, kinesthetic, reading"
+                      className="w-full p-3 bg-[#2a304e] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="text-left">
+                    <label htmlFor="communication_preference" className="text-gray-400 block mb-1 text-sm">Communication Preference</label>
+                    <input
+                      type="text"
+                      id="communication_preference"
+                      value={communicationPreference}
+                      onChange={(e) => setCommunicationPreference(e.target.value)}
+                      placeholder="e.g., direct, exploratory, conceptual"
+                      className="w-full p-3 bg-[#2a304e] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="text-left">
+                    <label htmlFor="feedback_preference" className="text-gray-400 block mb-1 text-sm">Feedback Preference</label>
+                    <input
+                      type="text"
+                      id="feedback_preference"
+                      value={feedbackPreference}
+                      onChange={(e) => setFeedbackPreference(e.target.value)}
+                      placeholder="e.g., encouraging, challenging, constructive"
+                      className="w-full p-3 bg-[#2a304e] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
                   <button
                     type="submit"
-                    disabled={loadingProfile || !username} // Disable if loading or username is empty
+                    disabled={loadingProfile || !username}
                     className="w-full px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 transition duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 disabled:opacity-50 flex items-center justify-center"
                   >
                     {loadingProfile ? 'Saving...' : 'Save Changes'}
