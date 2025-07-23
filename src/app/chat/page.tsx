@@ -1,7 +1,7 @@
 // src/app/chat/page.tsx
 "use client";
 
-import { useState, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useRef, Fragment, useCallback } from "react";
 import { supabase } from "@/utils/supabase"; // Assumes your Supabase client is correctly configured here
 import { useRouter } from "next/navigation";
 import {
@@ -56,80 +56,70 @@ interface UserProfileData {
   username: string | null;
   full_name: string | null;
   preferred_name?: string | null; // Optional, if you add this specifically to your DB
+  personality_profile: PersonalityProfile | null; // Include this here for direct access
 }
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false); // For ongoing chat processing
+  const [isInitialLoading, setIsInitialLoading] = useState(true); // For initial page load
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  // Renamed from userName to displayUserName to be more explicit about its purpose
   const [displayUserName, setDisplayUserName] = useState<string | null>(null);
-  // New state to hold the specific name to be used by the chatbot (e.g., first name)
   const [chatbotUserName, setChatbotUserName] = useState<string | null>(null);
-
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
 
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  // --- Authentication and History Loading Function (Wrapped in useCallback) ---
+  const checkAuthAndLoadHistory = useCallback(async () => {
+    setIsInitialLoading(true); // Start initial load indicator
 
-  // --- Authentication and History Loading Function (Moved outside useEffect) ---
-  const checkAuthAndLoadHistory = async () => {
-    setIsInitialLoading(true);
     const {
       data: { session },
       error,
     } = await supabase.auth.getSession();
 
     if (error || !session) {
+      console.warn("No active session found or error fetching session:", error?.message);
       router.push("/login");
       setIsInitialLoading(false);
       return;
     }
 
     const userId = session.user.id;
-    setUserEmail(session.user.email ?? null); // Set email
+    setUserEmail(session.user.email ?? null);
 
-    // 1. Fetch User Profile Data (including full_name and username)
-    let currentUsername: string | null = null;
-    let currentFullName: string | null = null;
-    let loadedPersonalityProfile: PersonalityProfile | null = null;
-
-    const { data: profileData, error: profileError } = await supabase
-      .from("profiles") // Assuming 'profiles' is your table for user metadata
-      .select("username, full_name, personality_profile") // Select personality_profile too
+    // 1. Fetch User Profile Data (including full_name, username, and personality_profile)
+    let profileData: UserProfileData | null = null;
+    const { data: fetchedProfileData, error: profileError } = await supabase
+      .from("profiles")
+      .select("username, full_name, personality_profile")
       .eq('id', userId)
       .single();
 
-    if (profileError && profileError.code !== 'PGRST116') {
+    if (profileError && profileError.code !== 'PGRST116') { // PGRST116 means no rows found (new user)
       console.error("❌ Failed to load user profile:", profileError.message);
-      // Fallback or show error
-    } else if (profileData) {
-      currentUsername = profileData.username;
-      currentFullName = profileData.full_name;
-      loadedPersonalityProfile = profileData.personality_profile as PersonalityProfile;
-
-      // Store personality profile in localStorage as before
-      if (loadedPersonalityProfile) {
-          localStorage.setItem('quirra_personality_profile', JSON.stringify(loadedPersonalityProfile));
-      } else {
-          localStorage.removeItem('quirra_personality_profile');
-      }
+      // Decide if you want to route to an error page or show an inline error.
+      // For now, continue with null profile data.
+    } else if (fetchedProfileData) {
+      profileData = fetchedProfileData as UserProfileData;
     }
 
     // Determine the name to display and the name for the chatbot
     let resolvedDisplayUserName: string;
     let resolvedChatbotUserName: string;
 
-    if (currentFullName) {
-      resolvedDisplayUserName = currentFullName;
-      resolvedChatbotUserName = currentFullName.split(' ')[0]; // Use first name from full_name
-    } else if (currentUsername) {
-      resolvedDisplayUserName = currentUsername;
-      resolvedChatbotUserName = currentUsername; // Use username as the chatbot name
+    if (profileData?.full_name) {
+      resolvedDisplayUserName = profileData.full_name;
+      resolvedChatbotUserName = profileData.full_name.split(' ')[0]; // Use first name from full_name
+    } else if (profileData?.username) {
+      resolvedDisplayUserName = profileData.username;
+      resolvedChatbotUserName = profileData.username; // Use username as the chatbot name
     } else {
       // Fallback to email part if no full_name or username
       const namePart = session.user.email?.split('@')[0] || "User";
@@ -141,7 +131,22 @@ export default function Home() {
 
     setDisplayUserName(resolvedDisplayUserName);
     setChatbotUserName(resolvedChatbotUserName);
-    setUserPersonalityProfile(loadedPersonalityProfile); // Set the personality profile from DB
+
+    // Set personality profile from DB or localStorage (DB takes precedence)
+    const storedPersonalityProfile = localStorage.getItem('quirra_personality_profile');
+    const parsedStoredPersonalityProfile: PersonalityProfile | null = storedPersonalityProfile ? JSON.parse(storedPersonalityProfile) : null;
+
+    let finalPersonalityProfile = profileData?.personality_profile || parsedStoredPersonalityProfile;
+
+    // Ensure the personality profile from DB is always authoritative if present
+    if (profileData?.personality_profile) {
+      localStorage.setItem('quirra_personality_profile', JSON.stringify(profileData.personality_profile));
+    } else if (!finalPersonalityProfile) {
+      // If no profile from DB and no profile in localStorage, remove any stale item
+      localStorage.removeItem('quirra_personality_profile');
+    }
+    setUserPersonalityProfile(finalPersonalityProfile);
+
 
     // 2. Load Chat History
     const { data, error: fetchError } = await supabase
@@ -152,45 +157,56 @@ export default function Home() {
 
     if (fetchError) {
       console.error("❌ Failed to load history:", fetchError.message);
+      // Optionally set an error message in state to display to the user
+      // setHistoryError("Failed to load chat history.");
     } else {
       const chatData = data.map((msg: any) => ({
         role: msg.role,
         content: msg.content,
         emotion_score: msg.emotion_score,
-        personality_profile: msg.personality_profile,
+        personality_profile: msg.personality_profile, // Ensure this matches the `type ChatMessage`
         id: crypto.randomUUID(), // Assign a new ID for client-side use
       }));
       setMessages(chatData);
     }
-    setIsInitialLoading(false);
-  };
-
+    setIsInitialLoading(false); // End initial load indicator
+  }, [router]); // Dependencies for useCallback
 
   // --- Authentication and History Loading Effect (calls the function) ---
   useEffect(() => {
-    // Call the function directly now that it's defined outside
     checkAuthAndLoadHistory();
-  }, [router]); // `checkAuthAndLoadHistory` uses `router`, so include it in dependencies.
-                // State setters are stable and don't need to be added.
+  }, [checkAuthAndLoadHistory]); // `checkAuthAndLoadHistory` is now a dependency
 
   // --- Effect to scroll to the bottom of the chat on new messages ---
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // --- Effect to auto-resize textarea ---
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'; // Reset height to recalculate
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [input]); // Recalculate height whenever input changes
+
   // --- Handler for submitting a new chat message ---
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || !userPersonalityProfile) return;
+    if (!input.trim() || isLoading || !userPersonalityProfile) {
+      console.warn("Submit aborted: input empty, loading, or personality profile missing.");
+      return;
+    }
 
     setIsLoading(true);
 
     const userMessage: ChatMessage = { role: "user", content: input, id: crypto.randomUUID() };
     setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    setInput(""); // Clear input immediately
 
     // Add a placeholder for the assistant's response
-    setMessages((prev) => [...prev, { role: "assistant", content: "", id: crypto.randomUUID() }]);
+    const assistantPlaceholderId = crypto.randomUUID();
+    setMessages((prev) => [...prev, { role: "assistant", content: "", id: assistantPlaceholderId }]);
 
     let accumulatedAssistantResponse = "";
     let detectedEmotionScore: number | undefined;
@@ -234,6 +250,7 @@ export default function Home() {
             }
             try {
               const data = JSON.parse(jsonStr);
+              // Capture emotion score from the first valid `emotion_score` received
               if (typeof data.emotion_score === 'number' && detectedEmotionScore === undefined) {
                 detectedEmotionScore = data.emotion_score;
               }
@@ -242,23 +259,29 @@ export default function Home() {
 
               setMessages((prevMessages) => {
                 const updatedMessages = [...prevMessages];
-                const lastAssistantMessage = updatedMessages[updatedMessages.length - 1];
+                // Find the placeholder assistant message by its ID
+                const assistantMsgIndex = updatedMessages.findIndex(msg => msg.id === assistantPlaceholderId);
 
-                if (lastAssistantMessage && lastAssistantMessage.role === "assistant") {
-                  lastAssistantMessage.content = accumulatedAssistantResponse;
+                if (assistantMsgIndex !== -1) {
+                  updatedMessages[assistantMsgIndex] = {
+                    ...updatedMessages[assistantMsgIndex],
+                    content: accumulatedAssistantResponse,
+                  };
                 }
                 return updatedMessages;
               });
             } catch (e) {
               console.error("Error parsing JSON from stream chunk:", e, "Raw:", jsonStr);
+              // Continue processing next chunks even if one fails to parse
             }
           }
         }
       }
 
+      // After streaming is complete, update the user message with emotion score
       setMessages((prev) => {
         const updatedMessages = [...prev];
-        const lastUserMessageIndex = updatedMessages.findLastIndex(msg => msg.role === 'user');
+        const lastUserMessageIndex = updatedMessages.findLastIndex(msg => msg.role === 'user' && msg.id === userMessage.id); // Ensure we update *this* user message
         if (lastUserMessageIndex !== -1 && detectedEmotionScore !== undefined) {
           updatedMessages[lastUserMessageIndex] = {
             ...updatedMessages[lastUserMessageIndex],
@@ -268,19 +291,61 @@ export default function Home() {
         return updatedMessages;
       });
 
+      // --- PERSIST MESSAGES TO SUPABASE ---
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+
+      if (userId) {
+        // Save the user's message (with emotion score)
+        const { error: userMessageError } = await supabase
+          .from("messages")
+          .insert({
+            user_id: userId,
+            role: "user",
+            content: userMessage.content,
+            emotion_score: detectedEmotionScore,
+            personality_profile: userPersonalityProfile, // Save user's current profile with their message
+          });
+
+        if (userMessageError) {
+          console.error("❌ Failed to save user message:", userMessageError.message);
+        }
+
+        // Save the assistant's response
+        const { error: assistantMessageError } = await supabase
+          .from("messages")
+          .insert({
+            user_id: userId,
+            role: "assistant",
+            content: accumulatedAssistantResponse,
+          });
+
+        if (assistantMessageError) {
+          console.error("❌ Failed to save assistant message:", assistantMessageError.message);
+        }
+      } else {
+        console.warn("User ID not available, messages not saved to DB.");
+      }
+
     } catch (err: any) {
-      console.error("❌ Chat error:", err.message);
+      console.error("❌ Chat submission error:", err.message);
       setMessages((prev) => {
         const updatedMessages = [...prev];
-        // Remove the temporary assistant message if it's empty
-        if (updatedMessages.length > 0 && updatedMessages[updatedMessages.length - 1]?.content === "" && updatedMessages[updatedMessages.length - 1]?.role === "assistant") {
-          updatedMessages.pop();
+        // Find and update the placeholder assistant message with the error
+        const assistantMsgIndex = updatedMessages.findIndex(msg => msg.id === assistantPlaceholderId);
+        if (assistantMsgIndex !== -1) {
+          updatedMessages[assistantMsgIndex] = {
+            ...updatedMessages[assistantMsgIndex],
+            content: `⚠️ Failed to get a response from Quirra. Please check your internet connection or try again. (${err.message.substring(0, 100)}...)`, // Truncate error message
+          };
+        } else {
+          // Fallback if placeholder wasn't found for some reason
+          updatedMessages.push({
+            role: "assistant",
+            content: `⚠️ An unexpected error occurred. Please try again.`,
+            id: crypto.randomUUID(),
+          });
         }
-        updatedMessages.push({
-          role: "assistant",
-          content: `⚠️ Failed to get a response from Quirra. ${err.message}. Please try again.`,
-          id: crypto.randomUUID(),
-        });
         return updatedMessages;
       });
     } finally {
@@ -290,11 +355,15 @@ export default function Home() {
 
   // --- Handler for resetting the conversation ---
   const handleReset = async () => {
-    if (isLoading) return;
-    setMessages([]);
-    setIsSidebarOpen(false);
+    if (isLoading) {
+      alert("Please wait for the current response to complete before resetting.");
+      return;
+    }
+    setMessages([]); // Clear client-side messages immediately
+    setIsSidebarOpen(false); // Close sidebar on reset
 
     try {
+      // Send a request to the backend to clear server-side history/context
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -305,21 +374,44 @@ export default function Home() {
         throw new Error(`HTTP error! status: ${res.status}, Message: ${errorData.response || 'Unknown error'}`);
       }
       console.log("Conversation history reset on server and client.");
+
+      // Also clear messages from Supabase for the current user
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const { error: deleteError } = await supabase
+          .from("messages")
+          .delete()
+          .eq('user_id', session.user.id);
+
+        if (deleteError) {
+          console.error("❌ Failed to clear user's messages in DB:", deleteError.message);
+          alert(`Failed to clear past messages from database: ${deleteError.message}`);
+        } else {
+          console.log("User's past messages cleared from database.");
+        }
+      }
+
     } catch (err: any) {
-      console.error("❌ Failed to reset conversation on server:", err.message);
-      alert(`Failed to reset conversation: ${err.message}`);
+      console.error("❌ Failed to reset conversation on server or clear DB:", err.message);
+      alert(`Failed to reset conversation: ${err.message}. Messages may not have been fully cleared.`);
     }
   };
 
-  // --- Handler for starting a new chat (client-side only for now) ---
+  // --- Handler for starting a new chat (client-side and server-side reset) ---
   const handleNewChat = () => {
-    // Before starting a new chat, also trigger a server-side reset
-    handleReset();
+    handleReset(); // A new chat implicitly means resetting the current one
   };
 
   // --- Handler for user logout ---
   const handleLogout = async () => {
-    router.push("/sign-out");
+    // Perform Supabase sign out first for consistency
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error("❌ Error signing out:", error.message);
+      alert(`Error signing out: ${error.message}`);
+      return; // Prevent redirect if sign out failed
+    }
+    router.push("/sign-out"); // Redirect to a sign-out confirmation or login page
   };
 
   // --- Utility function to copy text to clipboard ---
@@ -327,12 +419,44 @@ export default function Home() {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedMessageId(messageId);
-      setTimeout(() => setCopiedMessageId(null), 2000);
+      setTimeout(() => setCopiedMessageId(null), 2000); // Reset icon after 2 seconds
     } catch (err) {
       console.error("📋 Copy failed", err);
-      // Optionally, provide a more user-friendly error message
+      // Fallback for older browsers or restricted environments
       alert("Failed to copy text. Please try again or copy manually.");
     }
+  };
+
+  // --- Handle Personality Onboarding Completion ---
+  const handleOnboardingComplete = useCallback(async (profile: PersonalityProfile) => {
+    setUserPersonalityProfile(profile);
+    // Update the user's profile in the database with the new personality data
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+
+    if (userId) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ personality_profile: profile })
+        .eq('id', userId);
+
+      if (error) {
+        console.error("❌ Failed to save personality profile to DB:", error.message);
+        alert("Failed to save your personality profile. You might need to refresh.");
+      } else {
+        console.log("Personality profile saved to DB.");
+      }
+    } else {
+      console.warn("User ID not available, personality profile not saved to DB.");
+    }
+
+    // After onboarding, re-fetch full profile to get potentially updated user info (like `preferred_name` if added)
+    checkAuthAndLoadHistory();
+  }, [checkAuthAndLoadHistory]);
+
+  // Custom component for markdown links to open in new tabs
+  const LinkRenderer = ({ node, ...props }: { node?: any; [key: string]: any }) => {
+    return <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />;
   };
 
   // --- Conditional Rendering: Full-page loading spinner ---
@@ -346,24 +470,13 @@ export default function Home() {
   }
 
   // --- Conditional Rendering: Personality Onboarding ---
-  // The PersonalityOnboarding component should also handle initial user name input
   if (!userPersonalityProfile) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
-        {/* Onboarding will now also need to trigger a profile re-fetch or pass updated user info back */}
-        <PersonalityOnboarding onComplete={(profile) => {
-            setUserPersonalityProfile(profile);
-            // After onboarding, re-fetch full profile to get potentially updated name
-            checkAuthAndLoadHistory(); // Re-run the auth and history load to get the updated name
-        }} />
+        <PersonalityOnboarding onComplete={handleOnboardingComplete} />
       </div>
     );
   }
-
-  // Custom component for markdown links to open in new tabs
-  const LinkRenderer = ({ node, ...props }: { node?: any; [key: string]: any }) => {
-    return <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />;
-  };
 
   // --- Main Chat UI (rendered after initial loading and onboarding are complete) ---
   return (
@@ -405,7 +518,7 @@ export default function Home() {
           {/* User Profile Section */}
           {displayUserName && (
             <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-[#1a213a] border border-[#2a304e]">
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold text-white">
+              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
                 {displayUserName[0]?.toUpperCase()}
               </div>
               <span className="text-gray-200 text-base overflow-hidden text-ellipsis whitespace-nowrap">
@@ -430,7 +543,7 @@ export default function Home() {
           <button
             onClick={() => {
               router.push("/settings");
-              setIsSidebarOpen(false);
+              setIsSidebarOpen(false); // Close sidebar when navigating
             }}
             className="flex items-center gap-3 px-4 py-2 rounded-lg text-left text-gray-300 hover:bg-[#1a213a] hover:text-white transition-colors text-lg"
           >
@@ -475,17 +588,17 @@ export default function Home() {
         <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full flex flex-col custom-scrollbar">
           {messages.length === 0 && (
             <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 text-3xl font-semibold animate-fadeIn">
-              How can I help you today?
+              How can I help you today, {chatbotUserName || "User"}?
             </div>
           )}
 
-          <div className="flex flex-col gap-6"> {/* Increased gap for better spacing */}
+          <div className="flex flex-col gap-8"> {/* Increased gap for better spacing between messages */}
             {messages.map((msg) => (
               <div
                 key={msg.id} // Use msg.id for key
                 className={`group relative rounded-xl px-4 py-3 max-w-[90%] text-base break-words animate-fadeIn ${
                   msg.role === "user"
-                    ? "bg-blue-600 text-white self-end rounded-br-none"
+                    ? "bg-[#2A304E] text-white self-end rounded-br-none border border-[#3a405e]" // Changed user message background
                     : "bg-[#1a213a] text-white self-start rounded-bl-none shadow-md border border-[#2a304e]"
                 }`}
               >
@@ -504,41 +617,55 @@ export default function Home() {
 
                 {/* Assistant thinking indicator */}
                 {msg.role === "assistant" && msg.content === "" && isLoading ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 py-1"> {/* Added padding for alignment */}
                     <Loader2 className="animate-spin text-blue-400" size={20} />
-                    <span className="animate-typing-dots text-lg">Quirra is thinking...</span>
+                    <span className="animate-typing-dots text-lg text-gray-300">Quirra is thinking...</span>
                   </div>
                 ) : (
                   <Fragment>
                     <ReactMarkdown
                       components={{
+                        // Custom code block renderer for Gemini-like appearance
                         code({ node, inline, className, children, ...props }: CodeProps) {
                           const match = /language-(\w+)/.exec(className || '');
+                          const codeText = String(children).replace(/\n$/, '');
+                          const copyId = `code-${msg.id}-${match?.[1] || 'default'}`;
+                          const isCopied = copiedMessageId === copyId;
+
                           return !inline && match ? (
-                            <div className="relative rounded-md bg-gray-800 p-2 font-mono text-sm my-2 overflow-x-auto shadow-inner">
-                              <div className="flex justify-between items-center px-2 py-1 bg-gray-700 rounded-t-md text-xs text-gray-300">
+                            <div className="relative rounded-lg bg-gray-800 font-mono text-sm my-3 shadow-xl border border-gray-700 overflow-hidden">
+                              <div className="flex justify-between items-center px-4 py-2 bg-gray-700/70 text-xs text-gray-300 border-b border-gray-700">
                                 <span>{match[1].toUpperCase()}</span>
                                 <button
-                                  onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), `code-${msg.id}`)}
+                                  onClick={() => copyToClipboard(codeText, copyId)}
                                   className="text-gray-400 hover:text-white flex items-center gap-1 p-1 rounded hover:bg-gray-600 transition-colors"
+                                  aria-label={isCopied ? 'Code copied' : 'Copy code'}
                                 >
-                                  {copiedMessageId === `code-${msg.id}` ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                                  {copiedMessageId === `code-${msg.id}` ? 'Copied!' : 'Copy code'}
+                                  {isCopied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                                  {isCopied ? 'Copied!' : 'Copy code'}
                                 </button>
                               </div>
-                              <SyntaxHighlighter
-                                style={dark}
-                                language={match[1]}
-                                PreTag="pre"
-                                customStyle={{ background: 'transparent', padding: '10px 0', margin: '0', overflowX: 'auto', maxHeight: '400px' }}
-                                wrapLines={true}
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, '')}
-                              </SyntaxHighlighter>
+                              <div className="p-4 overflow-x-auto custom-scrollbar max-h-96"> {/* Added max-h-96 for vertical scroll */}
+                                <SyntaxHighlighter
+                                  style={dark} // Using the dark theme
+                                  language={match[1]}
+                                  PreTag="pre"
+                                  customStyle={{
+                                    background: 'transparent',
+                                    padding: '0',
+                                    margin: '0',
+                                    whiteSpace: 'pre-wrap', // Wrap long lines within the pre tag
+                                    wordBreak: 'break-word',
+                                  }}
+                                  wrapLines={true} // Ensure lines wrap in code blocks
+                                  {...props}
+                                >
+                                  {codeText}
+                                </SyntaxHighlighter>
+                              </div>
                             </div>
                           ) : (
-                            <code className={`${className} bg-gray-700/50 px-1 py-0.5 rounded text-sm font-mono`} {...props}>
+                            <code className={`${className} bg-gray-700/50 px-1 py-0.5 rounded text-sm font-mono whitespace-pre-wrap break-words`} {...props}>
                               {children}
                             </code>
                           );
@@ -555,65 +682,67 @@ export default function Home() {
                         table: ({ node, ...props }) => <table {...props} className="table-auto w-full my-2 text-left border-collapse border border-gray-700" />,
                         th: ({ node, ...props }) => <th {...props} className="px-4 py-2 border border-gray-700 bg-gray-700 font-semibold" />,
                         td: ({ node, ...props }) => <td {...props} className="px-4 py-2 border border-gray-700" />,
+                        // Adding stronger support for strong/bold and em/italic for general text enhancement
+                        strong: ({ node, ...props }) => <strong {...props} className="font-semibold text-white" />,
+                        em: ({ node, ...props }) => <em {...props} className="italic text-gray-200" />,
                       }}
                       remarkPlugins={[remarkGfm]}
                     >
                       {msg.content}
                     </ReactMarkdown>
                     {/* Copy button for all messages */}
-                    <button
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white transition-opacity duration-200"
-                      onClick={() => copyToClipboard(msg.content, `msg-${msg.id}`)}
-                      title="Copy message"
-                    >
-                      {copiedMessageId === `msg-${msg.id}` ? (
-                        <Check size={16} className="text-green-400" />
-                      ) : (
-                        <Copy size={16} />
-                      )}
-                    </button>
-                    {/* "Was this helpful?" feedback for assistant messages */}
-                    {msg.role === "assistant" && msg.content !== "" && (
-                      <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        <button className="p-1 rounded-full bg-gray-700 text-gray-300 hover:text-green-400 transition-colors" title="Helpful">
-                          <ThumbsUp size={16} />
-                        </button>
-                        <button className="p-1 rounded-full bg-gray-700 text-gray-300 hover:text-red-400 transition-colors" title="Not helpful">
-                          <ThumbsDown size={16} />
-                        </button>
-                      </div>
+                    {msg.content !== "" && ( // Only show copy if content is not empty (i.e., not the thinking state)
+                      <button
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white transition-opacity duration-200"
+                        onClick={() => copyToClipboard(msg.content, `msg-${msg.id}`)}
+                        title="Copy message"
+                      >
+                        {copiedMessageId === `msg-${msg.id}` ? (
+                          <Check size={16} className="text-green-400" />
+                        ) : (
+                          <Copy size={16} />
+                        )}
+                      </button>
                     )}
                   </Fragment>
                 )}
               </div>
             ))}
-            <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} /> {/* For auto-scrolling */}
           </div>
         </div>
 
+        {/* Input Area */}
         <form
           onSubmit={handleSubmit}
-          className="w-full max-w-4xl mx-auto p-4 bg-[#0A0B1A] border-t border-[#1a213a] flex items-center gap-2"
+          className="sticky bottom-0 bg-[#0A0B1A] p-4 border-t border-[#1a213a] flex items-center gap-4 w-full max-w-4xl mx-auto shadow-top"
         >
-          <input
-            type="text"
-            placeholder={isLoading ? "Quirra is thinking..." : "Ask Quirra anything..."}
-            className="flex-1 p-3 rounded-full bg-[#1a213a] text-white border border-[#2a304e] focus:outline-none focus:border-blue-500 placeholder-gray-400"
+          <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={isLoading || !userPersonalityProfile}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault(); // Prevent new line
+                handleSubmit(e as any); // Cast to any to satisfy type for FormEvent
+              }
+            }}
+            rows={1}
+            placeholder={isLoading ? "Quirra is typing..." : "Message Quirra..."}
+            className="flex-1 resize-none bg-[#1a213a] rounded-xl py-3 px-4 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar overflow-y-hidden text-base max-h-40" // Limit height
+            disabled={isLoading}
           />
-
-          {(input.trim() || isLoading) && ( // Show send button if there's input or if loading
-            <button
-              type="submit"
-              className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors duration-200"
-              title="Send message"
-              disabled={isLoading || !userPersonalityProfile || !input.trim()} // Disable if no input for actual sending
-            >
-              {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
-            </button>
-          )}
+          <button
+            type="submit"
+            className="bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-full transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+            disabled={!input.trim() || isLoading}
+          >
+            {isLoading ? (
+              <Loader2 className="animate-spin" size={20} />
+            ) : (
+              <Send size={20} />
+            )}
+          </button>
         </form>
       </div>
     </main>

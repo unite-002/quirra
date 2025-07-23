@@ -1,7 +1,7 @@
 // components/PersonalityOnboarding.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/utils/supabase";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -17,7 +17,7 @@ interface PersonalityOption {
   value: string;
   label: string;
   description: string;
-  icon?: React.ReactNode; // Optional icon for visual flair
+  icon?: React.ReactNode;
 }
 
 // Define the content and tone variations based on personality traits
@@ -142,7 +142,13 @@ const personalityData = {
 
 type OnboardingStep = "learning_style" | "communication_preference" | "feedback_preference" | "done";
 
-export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: PersonalityProfile) => void }) {
+export function PersonalityOnboarding({
+  onComplete,
+  initialProfile,
+}: {
+  onComplete: (profile: PersonalityProfile) => void;
+  initialProfile?: PersonalityProfile | null;
+}) {
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("learning_style");
   const [selectedLearningStyle, setSelectedLearningStyle] = useState<string | null>(null);
   const [selectedCommunicationPreference, setSelectedCommunicationPreference] = useState<string | null>(null);
@@ -153,11 +159,28 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
   const [quirraSuggestions, setQuirraSuggestions] = useState<string[]>([]);
   const [onboardingCompleteMessage, setOnboardingCompleteMessage] = useState<string | null>(null);
 
+  // Effect to set initial values and potentially skip steps if a profile already exists
   useEffect(() => {
-    // Dynamically update Quirra's tone and suggestions as choices are made
+    if (initialProfile) {
+      setSelectedLearningStyle(initialProfile.learning_style);
+      setSelectedCommunicationPreference(initialProfile.communication_preference);
+      setSelectedFeedbackPreference(initialProfile.feedback_preference);
+
+      // If all preferences are already set, jump directly to the "done" state
+      // This is ideal for returning users who are simply checking their settings.
+      if (initialProfile.learning_style && initialProfile.communication_preference && initialProfile.feedback_preference) {
+        setCurrentStep("done");
+      }
+    }
+  }, [initialProfile]); // Dependency on initialProfile ensures it reacts to changes
+
+  // Effect to dynamically update Quirra's tone and suggestions based on selections
+  useEffect(() => {
     let tone = "Welcome to Quirra! Let's get to know each other.";
     const currentSuggestions: string[] = [];
 
+    // Prioritize specific tones/suggestions based on selected preferences.
+    // For this demonstration, the last selected preference's tone overrides previous ones.
     if (selectedLearningStyle) {
       const style = personalityData.learning_styles.find(s => s.value === selectedLearningStyle);
       if (style) {
@@ -168,7 +191,6 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
     if (selectedCommunicationPreference) {
       const comm = personalityData.communication_preferences.find(c => c.value === selectedCommunicationPreference);
       if (comm) {
-        // This will override the previous tone if applicable, or combine if logic is more complex
         tone = comm.tone;
         currentSuggestions.push(...comm.suggestions);
       }
@@ -176,7 +198,6 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
     if (selectedFeedbackPreference) {
       const fb = personalityData.feedback_preferences.find(f => f.value === selectedFeedbackPreference);
       if (fb) {
-        // This will override or combine
         tone = fb.tone;
         currentSuggestions.push(...fb.suggestions);
       }
@@ -185,6 +206,7 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
     setQuirraTone(tone);
     setQuirraSuggestions(currentSuggestions);
 
+    // Generate the completion message when in the "done" step
     if (currentStep === "done") {
       const finalLearningStyle = personalityData.learning_styles.find(s => s.value === selectedLearningStyle)?.label || 'your chosen style';
       const finalCommPreference = personalityData.communication_preferences.find(c => c.value === selectedCommunicationPreference)?.label || 'your preferred communication';
@@ -194,11 +216,13 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
         `Great! I understand you're a **${finalLearningStyle}**, you prefer **${finalCommPreference}** communication, and you like **${finalFeedbackPreference}** feedback. I'm ready to learn and adapt to your unique needs! Let's begin!`
       );
     }
-
   }, [selectedLearningStyle, selectedCommunicationPreference, selectedFeedbackPreference, currentStep]);
 
-  const handleNextStep = async () => {
+  // Handle proceeding to the next step or completing the setup
+  const handleNextStep = useCallback(async () => {
     setError(null);
+
+    // Input validation for the current step
     if (currentStep === "learning_style" && !selectedLearningStyle) {
       setError("Please select your learning style.");
       return;
@@ -212,40 +236,40 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
       return;
     }
 
+    // Advance to the next step in the flow
     if (currentStep === "learning_style") {
       setCurrentStep("communication_preference");
     } else if (currentStep === "communication_preference") {
       setCurrentStep("feedback_preference");
     } else if (currentStep === "feedback_preference") {
+      // Last step: Save profile to Supabase
       setLoading(true);
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
+        const { data: { user }, error: userSessionError } = await supabase.auth.getUser();
+        if (userSessionError || !user) {
           setError("User not authenticated. Please log in again.");
           setLoading(false);
           return;
         }
 
-        const profile: PersonalityProfile = {
+        const profileToSave: PersonalityProfile = {
           learning_style: selectedLearningStyle!,
           communication_preference: selectedCommunicationPreference!,
           feedback_preference: selectedFeedbackPreference!,
         };
 
-        // --- CRITICAL CORRECTION HERE ---
-        // Save to the 'profiles' table, using 'id' (which is the user's UUID)
-        // and update the 'personality_profile' JSONB column.
+        // Upsert (insert or update) the personality profile in the 'profiles' table
         const { error: dbError } = await supabase
-          .from("profiles") // Changed from "user_profiles" to "profiles"
-          .upsert({ id: user.id, personality_profile: profile }, { onConflict: 'id' }); // Changed 'user_id' to 'id' for onConflict
+          .from("profiles")
+          .upsert({ id: user.id, personality_profile: profileToSave }, { onConflict: 'id' });
 
         if (dbError) {
           console.error("Error saving personality profile:", dbError);
-          setError("Failed to save your profile. Please try again.");
+          setError(`Failed to save your profile: ${dbError.message}`);
         } else {
-          localStorage.setItem('quirra_personality_profile', JSON.stringify(profile));
-          onComplete(profile);
-          setCurrentStep("done"); // Move to "done" step to show success message
+          // Store in localStorage for quick access if needed elsewhere without a database call
+          localStorage.setItem('quirra_personality_profile', JSON.stringify(profileToSave));
+          setCurrentStep("done"); // Transition to the success state
         }
       } catch (err: any) {
         console.error("Unexpected error during profile save:", err);
@@ -254,104 +278,31 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
         setLoading(false);
       }
     }
-  };
+  }, [currentStep, selectedLearningStyle, selectedCommunicationPreference, selectedFeedbackPreference]); // Dependencies for useCallback
 
-  const renderCurrentStep = () => {
-    switch (currentStep) {
-      case "learning_style":
-        return (
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-gray-100">How do you learn best?</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {personalityData.learning_styles.map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setSelectedLearningStyle(option.value)}
-                  className={`p-4 rounded-lg border-2 text-left transition-all duration-200 ${
-                    selectedLearningStyle === option.value
-                      ? "bg-blue-700 border-blue-500 text-white shadow-lg"
-                      : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-blue-600"
-                  }`}
-                >
-                  <p className="font-semibold text-lg flex items-center gap-2">
-                    {option.label}
-                    {selectedLearningStyle === option.value && <CheckCircle2 size={18} className="text-green-300" />}
-                  </p>
-                  <p className="text-sm text-gray-400 mt-1">{option.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      case "communication_preference":
-        return (
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-gray-100">How do you prefer Quirra to communicate?</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {personalityData.communication_preferences.map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setSelectedCommunicationPreference(option.value)}
-                  className={`p-4 rounded-lg border-2 text-left transition-all duration-200 ${
-                    selectedCommunicationPreference === option.value
-                      ? "bg-blue-700 border-blue-500 text-white shadow-lg"
-                      : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-blue-600"
-                  }`}
-                >
-                  <p className="font-semibold text-lg flex items-center gap-2">
-                    {option.label}
-                    {selectedCommunicationPreference === option.value && <CheckCircle2 size={18} className="text-green-300" />}
-                  </p>
-                  <p className="text-sm text-gray-400 mt-1">{option.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      case "feedback_preference":
-        return (
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-gray-100">What kind of feedback do you prefer?</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {personalityData.feedback_preferences.map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setSelectedFeedbackPreference(option.value)}
-                  className={`p-4 rounded-lg border-2 text-left transition-all duration-200 ${
-                    selectedFeedbackPreference === option.value
-                      ? "bg-blue-700 border-blue-500 text-white shadow-lg"
-                      : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-blue-600"
-                  }`}
-                >
-                  <p className="font-semibold text-lg flex items-center gap-2">
-                    {option.label}
-                    {selectedFeedbackPreference === option.value && <CheckCircle2 size={18} className="text-green-300" />}
-                  </p>
-                  <p className="text-sm text-gray-400 mt-1">{option.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      case "done":
-        return (
-          <div className="flex flex-col items-center justify-center text-center space-y-4 animate-fadeIn">
-            <CheckCircle2 size={64} className="text-green-400" />
-            <p className="text-2xl font-bold text-white">Setup Complete!</p>
-            <p className="text-lg text-gray-300 max-w-md">
-              {onboardingCompleteMessage && (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {onboardingCompleteMessage}
-                </ReactMarkdown>
-              )}
-            </p>
-            <p className="text-md text-gray-400 mt-4">You're all set to experience Quirra's personalized assistance.</p>
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
+  // Helper function to render options for each step, promoting reusability
+  const renderOptions = (options: PersonalityOption[], selectedValue: string | null, onSelect: (value: string) => void) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          onClick={() => onSelect(option.value)}
+          // Dynamic styling for selected vs. unselected options
+          className={`p-4 rounded-lg border-2 text-left transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 ${
+            selectedValue === option.value
+              ? "bg-blue-700 border-blue-500 text-white shadow-lg"
+              : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-blue-600"
+          }`}
+        >
+          <p className="font-semibold text-lg flex items-center gap-2">
+            {option.label}
+            {selectedValue === option.value && <CheckCircle2 size={18} className="text-green-300 animate-fadeIn" />}
+          </p>
+          <p className="text-sm text-gray-400 mt-1">{option.description}</p>
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="w-full max-w-3xl bg-[#0A0B1A] rounded-2xl shadow-xl border border-[#1a213a] p-8 text-white flex flex-col min-h-[500px]">
@@ -361,8 +312,45 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
       </div>
 
       <div className="flex-1 flex flex-col justify-between">
-        <div className="mb-8">
-          {renderCurrentStep()}
+        {/* Main content area for each step */}
+        <div className="mb-8 min-h-[250px] flex flex-col justify-center"> {/* Added min-h for consistent layout */}
+          {currentStep === "learning_style" && (
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-100">How do you learn best?</h3>
+              {renderOptions(personalityData.learning_styles, selectedLearningStyle, setSelectedLearningStyle)}
+            </div>
+          )}
+
+          {currentStep === "communication_preference" && (
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-100">How do you prefer Quirra to communicate?</h3>
+              {renderOptions(personalityData.communication_preferences, selectedCommunicationPreference, setSelectedCommunicationPreference)}
+            </div>
+          )}
+
+          {currentStep === "feedback_preference" && (
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-100">What kind of feedback do you prefer?</h3>
+              {renderOptions(personalityData.feedback_preferences, selectedFeedbackPreference, setSelectedFeedbackPreference)}
+            </div>
+          )}
+
+          {currentStep === "done" && (
+            <div className="flex flex-col items-center justify-center text-center space-y-4 animate-fadeIn">
+              <CheckCircle2 size={64} className="text-green-400" />
+              <p className="text-2xl font-bold text-white">Setup Complete!</p>
+              <p className="text-lg text-gray-300 max-w-md">
+                {onboardingCompleteMessage && (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {onboardingCompleteMessage}
+                  </ReactMarkdown>
+                )}
+              </p>
+              <p className="text-md text-gray-400 mt-4">You're all set to experience Quirra's personalized assistance.</p>
+            </div>
+          )}
+
+          {/* Error display */}
           {error && (
             <div className="mt-4 p-3 bg-red-800 border border-red-600 text-red-100 rounded-lg flex items-center gap-2">
               <XCircle size={20} />
@@ -371,6 +359,7 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
           )}
         </div>
 
+        {/* Quirra's dynamic tone preview */}
         {currentStep !== "done" && (
           <div className="bg-[#1a213a] p-4 rounded-lg border border-[#2a304e] flex items-center gap-4 text-gray-300 mt-auto">
             <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white">
@@ -382,25 +371,24 @@ export function PersonalityOnboarding({ onComplete }: { onComplete: (profile: Pe
           </div>
         )}
 
-        {currentStep === "done" && (
-            <button
-              onClick={() => onComplete({
-                learning_style: selectedLearningStyle!,
-                communication_preference: selectedCommunicationPreference!,
-                feedback_preference: selectedFeedbackPreference!,
-              })}
-              className="mt-6 w-full py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
-              disabled={loading}
-            >
-              Start Chatting!
-              {loading && <Loader2 className="animate-spin ml-2" size={20} />}
-            </button>
-        )}
-
-        {currentStep !== "done" && (
+        {/* Action buttons */}
+        {currentStep === "done" ? (
+          <button
+            onClick={() => onComplete({
+              learning_style: selectedLearningStyle!,
+              communication_preference: selectedCommunicationPreference!,
+              feedback_preference: selectedFeedbackPreference!,
+            })}
+            className="mt-6 w-full py-3 px-6 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
+            disabled={loading}
+          >
+            Start Chatting!
+            {loading && <Loader2 className="animate-spin ml-2" size={20} />}
+          </button>
+        ) : (
           <button
             onClick={handleNextStep}
-            className="mt-6 w-full py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
+            className="mt-6 w-full py-3 px-6 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
             disabled={loading ||
               (currentStep === "learning_style" && !selectedLearningStyle) ||
               (currentStep === "communication_preference" && !selectedCommunicationPreference) ||

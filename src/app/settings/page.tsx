@@ -2,7 +2,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ArrowLeft, User, Lock, Trash2, Bell, Mail, Save } from "lucide-react";
+import { ArrowLeft, User, Lock, Trash2, Bell, Mail, Save, Settings } from "lucide-react"; // Added Settings icon
 import { supabase } from "@/utils/supabase";
 import { useState, useEffect } from "react";
 
@@ -25,7 +25,8 @@ export default function SettingsPage() {
   const [username, setUsername] = useState<string | null>(null);
   const [fullName, setFullName] = useState<string>('');
 
-  // NEW: State for personality profile fields
+  // No longer directly setting these states from inputs on *this* page,
+  // but keeping them for initial fetch and potential display if needed elsewhere.
   const [learningStyle, setLearningStyle] = useState<string>('');
   const [communicationPreference, setCommunicationPreference] = useState<string>('');
   const [feedbackPreference, setFeedbackPreference] = useState<string>('');
@@ -34,7 +35,7 @@ export default function SettingsPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null);
 
-  // --- Profile Loading and Update Logic ---
+  // --- Profile Loading Logic ---
   useEffect(() => {
     const fetchUserAndProfile = async () => {
       setLoadingProfile(true);
@@ -54,7 +55,7 @@ export default function SettingsPage() {
         // Fetch user profile from the 'profiles' table, including new fields
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('username, full_name, learning_style, communication_preference, feedback_preference') // UPDATED: Select new fields
+          .select('username, full_name, learning_style, communication_preference, feedback_preference')
           .eq('id', user.id)
           .single();
 
@@ -62,17 +63,17 @@ export default function SettingsPage() {
           console.error('Error fetching user profile:', profileError.message);
           setProfileMessage(`Error loading profile details: ${profileError.message}`);
         } else if (profile) {
-          // If profile exists, set all relevant state variables
+          // If profile exists, set relevant state variables
           setUsername(profile.username);
           setFullName(profile.full_name || '');
-          setLearningStyle(profile.learning_style || ''); // NEW
-          setCommunicationPreference(profile.communication_preference || ''); // NEW
-          setFeedbackPreference(profile.feedback_preference || ''); // NEW
+          // These are fetched but no longer directly editable on this page
+          setLearningStyle(profile.learning_style || '');
+          setCommunicationPreference(profile.communication_preference || '');
+          setFeedbackPreference(profile.feedback_preference || '');
         } else {
           // If no profile found, but user exists, pre-fill full_name from user_metadata if available
           setFullName(user.user_metadata?.full_name || '');
           setUsername(null); // Explicitly set username to null if not found in profiles
-          // Set default values for new personality fields if no profile exists
           setLearningStyle('');
           setCommunicationPreference('');
           setFeedbackPreference('');
@@ -91,7 +92,7 @@ export default function SettingsPage() {
     fetchUserAndProfile();
   }, [router]);
 
-  // Handle profile update logic
+  // Handle profile update logic (only for username and full_name on this page)
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoadingProfile(true);
@@ -106,14 +107,12 @@ export default function SettingsPage() {
         return;
       }
 
-      // Prepare the profile data to be upserted
+      // Prepare the profile data to be upserted (only username and full_name from this page)
       const profileDataToSave = {
         id: user.id,
         username: username, // Ensure username is not null here, add validation if needed
         full_name: fullName.trim() || null,
-        learning_style: learningStyle.trim() || null,     // NEW
-        communication_preference: communicationPreference.trim() || null, // NEW
-        feedback_preference: feedbackPreference.trim() || null,    // NEW
+        // Removed learning_style, communication_preference, feedback_preference from here
       };
 
       // Upsert to 'profiles' table
@@ -276,43 +275,7 @@ export default function SettingsPage() {
                     />
                   </div>
 
-                  {/* Personality Profile Fields */}
-                  <div className="text-left">
-                    <label htmlFor="learning_style" className="text-gray-300 block mb-2 text-sm font-medium">Learning Style</label>
-                    <input
-                      type="text"
-                      id="learning_style"
-                      value={learningStyle}
-                      onChange={(e) => setLearningStyle(e.target.value)}
-                      placeholder="e.g., visual, auditory, kinesthetic, reading/writing"
-                      className="w-full p-3 bg-[#1a213a] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">How do you prefer to learn new information?</p>
-                  </div>
-                  <div className="text-left">
-                    <label htmlFor="communication_preference" className="text-gray-300 block mb-2 text-sm font-medium">Communication Preference</label>
-                    <input
-                      type="text"
-                      id="communication_preference"
-                      value={communicationPreference}
-                      onChange={(e) => setCommunicationPreference(e.target.value)}
-                      placeholder="e.g., direct, exploratory, conceptual, detailed"
-                      className="w-full p-3 bg-[#1a213a] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">How should Quirra communicate with you?</p>
-                  </div>
-                  <div className="text-left">
-                    <label htmlFor="feedback_preference" className="text-gray-300 block mb-2 text-sm font-medium">Feedback Preference</label>
-                    <input
-                      type="text"
-                      id="feedback_preference"
-                      value={feedbackPreference}
-                      onChange={(e) => setFeedbackPreference(e.target.value)}
-                      placeholder="e.g., encouraging, challenging, constructive, detailed"
-                      className="w-full p-3 bg-[#1a213a] text-white border border-[#3b4168] rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">How do you like to receive feedback?</p>
-                  </div>
+                  {/* Removed Personality Profile Fields from this form */}
 
                   <button
                     type="submit"
@@ -345,6 +308,19 @@ export default function SettingsPage() {
               <button
                 className="px-5 py-2 bg-gray-700 rounded-md hover:bg-gray-600 transition-colors text-white text-base font-medium"
                 onClick={() => router.push('/email-preferences')}
+              >
+                Manage
+              </button>
+            </div>
+
+            {/* NEW: Personal Preferences Button */}
+            <div className="flex justify-between items-center py-3">
+              <span className="text-gray-200 text-lg font-medium flex items-center gap-2">
+                <Settings size={20} className="text-gray-400" /> Personal Preferences
+              </span>
+              <button
+                className="px-5 py-2 bg-gray-700 rounded-md hover:bg-gray-600 transition-colors text-white text-base font-medium"
+                onClick={() => router.push('/personal-preferences')}
               >
                 Manage
               </button>

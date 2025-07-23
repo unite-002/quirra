@@ -46,7 +46,7 @@ export default function Home() {
           transition={{ delay: 0.3, duration: 0.8 }}
           className="text-lg md:text-xl mt-6 max-w-3xl mx-auto text-gray-300"
         >
-          Your deeply personal, emotionally intelligent AI — built to mentor, support, and evolve with you. Private, ethical, and designed for growth.
+          Your deeply personal, emotionally intelligent AI — built to mentor, support, and evolve with you. Private, ethical, and designed for lifelong growth.
         </motion.p>
 
         <motion.div
@@ -55,15 +55,17 @@ export default function Home() {
           transition={{ delay: 0.6, duration: 0.8 }}
           className="mt-10 flex justify-center gap-4"
         >
-          <Link href="/sign-up">
-            <button className="px-6 py-3 bg-white text-[#040417] font-semibold rounded-xl hover:bg-opacity-90 transition text-lg shadow">
-              Get Started
-            </button>
+          <Link
+            href="/sign-up"
+            className="px-6 py-3 bg-white text-[#040417] font-semibold rounded-xl hover:bg-opacity-90 transition text-lg shadow text-center"
+          >
+            Get Started
           </Link>
-          <Link href="/learn-more">
-            <button className="px-6 py-3 border border-white text-white rounded-xl hover:bg-white hover:text-[#040417] transition text-lg">
-              Learn More
-            </button>
+          <Link
+            href="/learn-more"
+            className="px-6 py-3 border border-white text-white rounded-xl hover:bg-white hover:text-[#040417] transition text-lg text-center"
+          >
+            Learn More
           </Link>
         </motion.div>
       </section>
@@ -119,8 +121,8 @@ const features = [
       'No tracking. No profiling. All data is local or encrypted. Quirra is built ethically — to protect you and your growth, not exploit it.',
   },
   {
-    title: 'Future-Proof & Quantum-Ready',
+    title: 'Real-Time Adaptive Coaching',
     description:
-      'Quirra is built on scalable architecture prepared for quantum computing — ready to evolve with the next generation of technology.',
+      'Quirra adjusts in real-time to your mood, focus, and progress — offering just-in-time motivation, personalized learning, and support exactly when you need it.',
   },
 ];

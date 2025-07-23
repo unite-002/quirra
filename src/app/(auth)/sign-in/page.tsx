@@ -2,7 +2,7 @@ import AuthForm from '@/components/auth/AuthForm'
 
 export default function SignInPage() {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-[#040417] text-white">
+    <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-[#040417] text-white">  
       <div className="text-center space-y-2 mb-6">
         <h1 className="text-3xl md:text-4xl font-bold">Welcome back, visionary.</h1>
         <p className="text-gray-400">Sign in to access your personal AI experience.</p>
