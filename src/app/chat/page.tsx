@@ -1,4 +1,3 @@
-// src/app/chat/page.tsx
 "use client";
 
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
@@ -9,7 +8,7 @@ import {
   Settings,
   MessageSquarePlus,
   Copy,
-  Send,
+  Send, // Keep Send icon, we'll style it
   Loader2, // Will be used for thinking indicator
   LogOut,
   Check,
@@ -356,6 +355,8 @@ export default function Home() {
   // --- Handler for resetting the conversation ---
   const handleReset = async () => {
     if (isLoading) {
+      // Using a simple alert for now as per previous instruction to avoid custom modals for this specific case.
+      // In a real app, a custom modal would be preferred.
       alert("Please wait for the current response to complete before resetting.");
       return;
     }
@@ -417,7 +418,16 @@ export default function Home() {
   // --- Utility function to copy text to clipboard ---
   const copyToClipboard = async (text: string, messageId: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      // Using document.execCommand('copy') as navigator.clipboard.writeText() might be restricted in iframes
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed'; // Avoid scrolling to bottom
+      textarea.style.left = '-9999px'; // Move off-screen
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+
       setCopiedMessageId(messageId);
       setTimeout(() => setCopiedMessageId(null), 2000); // Reset icon after 2 seconds
     } catch (err) {
@@ -529,13 +539,13 @@ export default function Home() {
           {userPersonalityProfile && (
             <div className="flex flex-col gap-1 px-4 py-2 rounded-lg text-left text-gray-400 text-sm">
               <p>
-                **Learning:** <span className="text-gray-200 capitalize">{userPersonalityProfile.learning_style.replace(/_/g, ' ')}</span>
+                <b>Learning:</b> <span className="text-gray-200 capitalize">{userPersonalityProfile.learning_style.replace(/_/g, ' ')}</span>
               </p>
               <p>
-                **Communication:** <span className="text-gray-200 capitalize">{userPersonalityProfile.communication_preference.replace(/_/g, ' ')}</span>
+                <b>Communication:</b> <span className="text-gray-200 capitalize">{userPersonalityProfile.communication_preference.replace(/_/g, ' ')}</span>
               </p>
               <p>
-                **Feedback:** <span className="text-gray-200 capitalize">{userPersonalityProfile.feedback_preference.replace(/_/g, ' ')}</span>
+                <b>Feedback:</b> <span className="text-gray-200 capitalize">{userPersonalityProfile.feedback_preference.replace(/_/g, ' ')}</span>
               </p>
             </div>
           )}
@@ -717,32 +727,38 @@ export default function Home() {
           onSubmit={handleSubmit}
           className="sticky bottom-0 bg-[#0A0B1A] p-4 border-t border-[#1a213a] flex items-center gap-4 w-full max-w-4xl mx-auto shadow-top"
         >
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault(); // Prevent new line
-                handleSubmit(e as any); // Cast to any to satisfy type for FormEvent
-              }
-            }}
-            rows={1}
-            placeholder={isLoading ? "Quirra is typing..." : "Message Quirra..."}
-            className="flex-1 resize-none bg-[#1a213a] rounded-xl py-3 px-4 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar overflow-y-hidden text-base max-h-40" // Limit height
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            className="bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-full transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
-            disabled={!input.trim() || isLoading}
-          >
-            {isLoading ? (
-              <Loader2 className="animate-spin" size={20} />
-            ) : (
-              <Send size={20} />
+          <div className="relative flex-1"> {/* This div will contain textarea and absolutely positioned button */}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e as any);
+                }
+              }}
+              rows={1}
+              placeholder={isLoading ? "Quirra is typing..." : "Ask Quirra anything..."}
+              className="w-full resize-none bg-[#1a213a] rounded-xl py-3 pl-4 pr-12 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar overflow-y-hidden text-base max-h-40"
+              disabled={isLoading}
+            />
+            {/* Send button inside the textarea container */}
+            {(input.trim() || isLoading) && ( // Only show if input has content or is loading
+              <button
+                type="submit"
+                className="absolute bottom-2 right-2 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+                disabled={!input.trim() || isLoading}
+                aria-label="Send message"
+              >
+                {isLoading ? (
+                  <Loader2 className="animate-spin" size={20} />
+                ) : (
+                  <Send size={20} className="rotate-0 transition-transform duration-200" /> // Removed -rotate-45 for horizontal
+                )}
+              </button>
             )}
-          </button>
+          </div>
         </form>
       </div>
     </main>
