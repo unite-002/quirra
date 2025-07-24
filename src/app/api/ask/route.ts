@@ -27,12 +27,13 @@ export const maxDuration = 60;
 
 /**
  * Saves a message to the Supabase 'messages' table.
- * Includes sentiment_score for user messages.
+ * Includes sentiment_score for user messages and chat_session_id.
  * Returns true on success, false on error.
  */
 async function saveMessage(
   supabase: any,
   userId: string,
+  chatSessionId: string, // Added chatSessionId
   role: 'user' | 'assistant',
   content: string,
   sentimentScore?: number, // Changed from emotionScore to sentimentScore
@@ -41,6 +42,7 @@ async function saveMessage(
   const { error } = await supabase.from('messages').insert([
     {
       user_id: userId,
+      chat_session_id: chatSessionId, // Store chat_session_id
       role,
       content,
       created_at: new Date().toISOString(),
@@ -60,9 +62,9 @@ async function saveMessage(
 // Instead, it's for extracted, condensed information.
 // Ensure your 'memory' table has a 'content' column if you use this,
 // or adjust the column names as per your 'memory' table's schema.
-// async function saveMemory(supabase: any, userId: string, role: 'user' | 'assistant', content: string): Promise<boolean> {
+// async function saveMemory(supabase: any, userId: string, chatSessionId: string, role: 'user' | 'assistant', content: string): Promise<boolean> {
 //   const { error } = await supabase.from('memory').insert([
-//     { user_id: userId, role, content, timestamp: new Date().toISOString() },
+//     { user_id: userId, chat_session_id: chatSessionId, role, content, timestamp: new Date().toISOString() },
 //   ]);
 //   if (error) {
 //     console.error(`❌ Supabase: Failed to save memory for ${role}:`, error.message);
@@ -193,7 +195,7 @@ const getQuirraPersonalizedInstruction = (
 // --- Main API Route Handler ---
 
 export async function POST(req: Request) {
-  const { prompt, reset, userName, personalityProfile } = await req.json();
+  const { prompt, reset, userName, personalityProfile, chatSessionId } = await req.json(); // Destructure chatSessionId
   const supabase = createRouteHandlerClient({ cookies });
 
   // 1. Validate Environment Variables
@@ -208,6 +210,12 @@ export async function POST(req: Request) {
   if (!openAIApiKey) {
     console.error('❌ Server Error: OPENAI_API_KEY is not set. Message analysis will use defaults.');
     // Do not return here, allow the analysis function to use defaults if needed
+  }
+
+  // Validate chatSessionId
+  if (!chatSessionId) {
+    console.error('❌ Client Error: chatSessionId is missing from the request.');
+    return NextResponse.json({ content: '❌ Chat session ID is missing. Please restart your chat.' }, { status: 400 });
   }
 
   try {
@@ -226,22 +234,25 @@ export async function POST(req: Request) {
 
     // 3. Handle Reset Conversation
     if (reset === true) {
+      // Delete messages and memory specifically for the current chatSessionId
       const { error: deleteMessagesError } = await supabase
         .from('messages')
         .delete()
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .eq('chat_session_id', chatSessionId); // Filter by chatSessionId
 
       const { error: deleteMemoryError } = await supabase
         .from('memory')
         .delete()
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .eq('chat_session_id', chatSessionId); // Filter by chatSessionId
 
       if (deleteMessagesError || deleteMemoryError) {
         console.error('❌ Supabase Error: Failed to clear messages or memory for reset:', deleteMessagesError?.message || deleteMemoryError?.message);
         return NextResponse.json({ content: '🧠 Failed to reset conversation. Please try again.' }, { status: 500 });
       }
 
-      console.log(`✅ Conversation history and memory reset for user: ${userId}`);
+      console.log(`✅ Conversation history and memory reset for user: ${userId}, session: ${chatSessionId}`);
       return NextResponse.json({ content: '🧠 Conversation reset. Let\'s begin again.' });
     }
 
@@ -253,11 +264,12 @@ export async function POST(req: Request) {
     // 5. Perform comprehensive message analysis
     const userAnalysisResult: MessageAnalysis = await analyzeMessageTone(prompt);
 
-    // 6. Fetch Message History and Memory
+    // 6. Fetch Message History and Memory for the current chat session
     const { data: historyData, error: fetchHistoryError } = await supabase
       .from('messages')
       .select('role, content')
       .eq('user_id', userId)
+      .eq('chat_session_id', chatSessionId) // Filter by chatSessionId
       .order('created_at', { ascending: true })
       .limit(12);
 
@@ -265,10 +277,12 @@ export async function POST(req: Request) {
       console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
     }
 
+    // Note: If 'memory' table should also be session-specific, uncomment and adjust `saveMemory` above
     const { data: memoryData, error: fetchMemoryError } = await supabase
       .from('memory')
       .select('content')
       .eq('user_id', userId)
+      // .eq('chat_session_id', chatSessionId) // Uncomment if memory is session-specific
       .order('created_at', { ascending: false })
       .limit(5);
 
@@ -316,14 +330,14 @@ export async function POST(req: Request) {
     currentMessageHistory.push(userMsg);
 
     // 8. Asynchronously save the user message to Supabase
-    saveMessage(supabase, userId, 'user', prompt, userAnalysisResult.sentiment_score, personalityProfile);
+    saveMessage(supabase, userId, chatSessionId, 'user', prompt, userAnalysisResult.sentiment_score, personalityProfile);
 
     // 9. Determine if Live Search is Needed based on intent
     const needsLiveSearch = userAnalysisResult.intent === 'information_seeking' ||
-                            userAnalysisResult.intent === 'question' ||
-                            userAnalysisResult.topic_keywords.some((keyword: string) =>
-                              ["news", "current", "latest", "update", "weather", "define", "how to"].includes(keyword.toLowerCase())
-                            );
+      userAnalysisResult.intent === 'question' ||
+      userAnalysisResult.topic_keywords.some((keyword: string) =>
+        ["news", "current", "latest", "update", "weather", "define", "how to"].includes(keyword.toLowerCase())
+      );
 
     // 10. Execute Live Search (if needed and Serper key is available)
     if (needsLiveSearch) {
@@ -359,7 +373,8 @@ export async function POST(req: Request) {
 
               const searchReply = `🧠 Here's what I found:\n\n${topSummaries}`;
 
-              saveMessage(supabase, userId, 'assistant', searchReply, 0);
+              // Save the search result as an assistant message
+              saveMessage(supabase, userId, chatSessionId, 'assistant', searchReply, 0);
 
               // Return the search result directly to the frontend.
               return NextResponse.json({ content: searchReply, emotion_score: userAnalysisResult.sentiment_score });
@@ -390,7 +405,7 @@ export async function POST(req: Request) {
         repetition_penalty: 1.1,
         max_tokens: 500,
         temperature: 0.7,
-        user: userId,
+        user: `${userId}-${chatSessionId}`, // Combine userId and chatSessionId for OpenRouter's user tracking
         stream: true,
       }),
       signal: AbortSignal.timeout(50000)
@@ -430,10 +445,6 @@ export async function POST(req: Request) {
                   const delta = data.choices?.[0]?.delta?.content || '';
                   if (delta) {
                     accumulatedContent += delta;
-                    // Pass sentiment_score with the first chunk
-                    // The emotion_score is relevant to the *user's* prompt, not the LLM's response chunk.
-                    // It's generally sufficient to send it once with the initial message or handle it client-side based on user input.
-                    // Sending it with every chunk is redundant for client-side display unless specific streaming needs exist.
                     controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: delta })}\n\n`));
                   }
                 } catch (e) {
@@ -448,7 +459,7 @@ export async function POST(req: Request) {
         } finally {
           // Asynchronously save the *complete* assistant message to Supabase
           if (accumulatedContent) {
-            saveMessage(supabase, userId, 'assistant', accumulatedContent, 0); // Assistant's emotion score can be 0 or derived if you analyze its output.
+            saveMessage(supabase, userId, chatSessionId, 'assistant', accumulatedContent, 0); // Assistant's emotion score can be 0 or derived if you analyze its output.
           }
           controller.close();
         }

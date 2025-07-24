@@ -8,16 +8,16 @@ import {
   Settings,
   MessageSquarePlus,
   Copy,
-  Send, // Keep Send icon, we'll style it
-  Loader2, // Will be used for thinking indicator
+  Send,
+  Loader2,
   LogOut,
   Check,
   RotateCcw,
   Laugh,
   Frown,
-  Meh, // For neutral emotion
-  ThumbsUp,
-  ThumbsDown,
+  Meh,
+  Edit,
+  Eraser, // Added for deleting chat session (optional, but good for management)
 } from "lucide-react";
 import { PersonalityOnboarding } from "@/components/PersonalityOnboarding"; // Your onboarding component
 
@@ -42,6 +42,8 @@ type ChatMessage = {
   emotion_score?: number; // Detected emotion from API for user messages
   personality_profile?: PersonalityProfile; // User's profile, saved with user messages (historical)
   id: string; // Add a unique ID for each message for better keying and copying
+  created_at?: string; // Add created_at for sorting and editing logic
+  chat_session_id: string; // Add chat_session_id to message type
 };
 
 interface PersonalityProfile {
@@ -58,6 +60,13 @@ interface UserProfileData {
   personality_profile: PersonalityProfile | null; // Include this here for direct access
 }
 
+// Define the type for a chat session
+interface ChatSession {
+  id: string;
+  title: string;
+  created_at: string;
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -69,6 +78,13 @@ export default function Home() {
   const [chatbotUserName, setChatbotUserName] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null); // State for editing feature
+  const [isRegenerating, setIsRegenerating] = useState(false); // State to indicate regeneration after edit
+
+  // --- NEW STATE FOR CHAT SESSIONS ---
+  const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  // ---------------------------------
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -103,8 +119,6 @@ export default function Home() {
 
     if (profileError && profileError.code !== 'PGRST116') { // PGRST116 means no rows found (new user)
       console.error("❌ Failed to load user profile:", profileError.message);
-      // Decide if you want to route to an error page or show an inline error.
-      // For now, continue with null profile data.
     } else if (fetchedProfileData) {
       profileData = fetchedProfileData as UserProfileData;
     }
@@ -150,27 +164,43 @@ export default function Home() {
     }
     setUserPersonalityProfile(finalPersonalityProfile);
 
-
-    // 2. Load Chat History
-    const { data, error: fetchError } = await supabase
-      .from("messages")
-      .select("role, content, emotion_score, personality_profile")
+    // --- NEW: Load Chat Sessions ---
+    const { data: sessionsData, error: sessionsError } = await supabase
+      .from("chat_sessions")
+      .select("id, title, created_at")
       .eq('user_id', userId)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false }); // Most recent sessions first
 
-    if (fetchError) {
-      console.error("❌ Failed to load history:", fetchError.message);
-      // Optionally set an error message in state to display to the user
-      // setHistoryError("Failed to load chat history.");
+    if (sessionsError) {
+      console.error("❌ Failed to load chat sessions:", sessionsError.message);
     } else {
-      const chatData = data.map((msg: any) => ({
-        role: msg.role,
-        content: msg.content,
-        emotion_score: msg.emotion_score,
-        personality_profile: msg.personality_profile, // Ensure this matches the `type ChatMessage`
-        id: crypto.randomUUID(), // Assign a new ID for client-side use
-      }));
-      setMessages(chatData);
+      const sortedSessions = sessionsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setChatSessions(sortedSessions);
+
+      // If there are existing sessions, set the most recent one as active
+      if (sortedSessions.length > 0) {
+        setActiveChatSessionId(sortedSessions[0].id);
+        // Load messages for the most recent session
+        const { data: messagesData, error: fetchMessagesError } = await supabase
+          .from("messages")
+          .select("id, role, content, emotion_score, personality_profile, created_at, chat_session_id")
+          .eq('user_id', userId)
+          .eq('chat_session_id', sortedSessions[0].id) // Filter by active chat session ID
+          .order("created_at", { ascending: true });
+
+        if (fetchMessagesError) {
+          console.error("❌ Failed to load messages for active session:", fetchMessagesError.message);
+        } else {
+          setMessages(messagesData as ChatMessage[]);
+        }
+      } else {
+        // If no sessions, create a new one automatically for the first chat
+        const newSessionId = crypto.randomUUID();
+        setActiveChatSessionId(newSessionId);
+        // We'll save this new session to the DB when the first message is sent.
+        // For now, just set the active ID and ensure messages state is empty.
+        setMessages([]);
+      }
     }
     setIsInitialLoading(false); // End initial load indicator
   }, [router]); // Dependencies for useCallback
@@ -185,32 +215,38 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // --- Effect to auto-resize textarea ---
+  // --- Effect to auto-resize textarea and manage scroll ---
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'; // Reset height to recalculate
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+      // Set height based on scrollHeight, but cap at max height (e.g., 5 rows * line-height)
+      const lineHeight = parseFloat(getComputedStyle(textareaRef.current).lineHeight);
+      const maxHeight = lineHeight * 5; // Adjust 5 to desired max lines before scroll
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, maxHeight)}px`;
+      if (textareaRef.current.scrollHeight > maxHeight) {
+        textareaRef.current.style.overflowY = 'auto'; // Enable scroll if content exceeds max height
+      } else {
+        textareaRef.current.style.overflowY = 'hidden'; // Hide scroll otherwise
+      }
     }
   }, [input]); // Recalculate height whenever input changes
 
-  // --- Handler for submitting a new chat message ---
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading || !userPersonalityProfile) {
-      console.warn("Submit aborted: input empty, loading, or personality profile missing.");
+  // --- Function to send message to API and save to DB ---
+  const sendToApiAndSave = async (
+    currentMessagesForContext: ChatMessage[], // The messages including the new/edited user message, up to that point
+    userMessageToProcess: ChatMessage, // The specific user message being sent/edited
+    assistantPlaceholderId: string,
+    originalUserMessageCreatedAt?: string // Pass original timestamp for deletion logic if editing
+  ) => {
+    if (!activeChatSessionId) {
+      console.error("No active chat session ID. Cannot send message or save.");
+      setIsLoading(false);
+      setIsRegenerating(false);
+      alert("Error: No active chat session. Please try starting a new chat.");
       return;
     }
 
     setIsLoading(true);
-
-    const userMessage: ChatMessage = { role: "user", content: input, id: crypto.randomUUID() };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput(""); // Clear input immediately
-
-    // Add a placeholder for the assistant's response
-    const assistantPlaceholderId = crypto.randomUUID();
-    setMessages((prev) => [...prev, { role: "assistant", content: "", id: assistantPlaceholderId }]);
-
     let accumulatedAssistantResponse = "";
     let detectedEmotionScore: number | undefined;
 
@@ -219,9 +255,14 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: userMessage.content,
-          userName: chatbotUserName, // Pass the chatbot-specific user name
-          personalityProfile: userPersonalityProfile, // Pass the user's personality profile
+          prompt: userMessageToProcess.content,
+          userName: chatbotUserName,
+          personalityProfile: userPersonalityProfile,
+          history: currentMessagesForContext.map(msg => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+          chatSessionId: activeChatSessionId, // --- SEND CHAT SESSION ID ---
         }),
       });
 
@@ -253,7 +294,6 @@ export default function Home() {
             }
             try {
               const data = JSON.parse(jsonStr);
-              // Capture emotion score from the first valid `emotion_score` received
               if (typeof data.emotion_score === 'number' && detectedEmotionScore === undefined) {
                 detectedEmotionScore = data.emotion_score;
               }
@@ -262,7 +302,6 @@ export default function Home() {
 
               setMessages((prevMessages) => {
                 const updatedMessages = [...prevMessages];
-                // Find the placeholder assistant message by its ID
                 const assistantMsgIndex = updatedMessages.findIndex(msg => msg.id === assistantPlaceholderId);
 
                 if (assistantMsgIndex !== -1) {
@@ -275,21 +314,24 @@ export default function Home() {
               });
             } catch (e) {
               console.error("Error parsing JSON from stream chunk:", e, "Raw:", jsonStr);
-              // Continue processing next chunks even if one fails to parse
             }
           }
         }
       }
 
-      // After streaming is complete, update the user message with emotion score
+      // After streaming is complete, update the user message with emotion score and a new created_at for persistence
+      const finalUserMessage = {
+        ...userMessageToProcess,
+        emotion_score: detectedEmotionScore,
+        created_at: new Date().toISOString(), // Assign a fresh timestamp for persistence
+        chat_session_id: activeChatSessionId, // Ensure session ID is added
+      };
+
       setMessages((prev) => {
         const updatedMessages = [...prev];
-        const lastUserMessageIndex = updatedMessages.findLastIndex(msg => msg.role === 'user' && msg.id === userMessage.id); // Ensure we update *this* user message
-        if (lastUserMessageIndex !== -1 && detectedEmotionScore !== undefined) {
-          updatedMessages[lastUserMessageIndex] = {
-            ...updatedMessages[lastUserMessageIndex],
-            emotion_score: detectedEmotionScore
-          };
+        const userMsgIndex = updatedMessages.findIndex(msg => msg.id === userMessageToProcess.id);
+        if (userMsgIndex !== -1) {
+          updatedMessages[userMsgIndex] = finalUserMessage;
         }
         return updatedMessages;
       });
@@ -299,33 +341,99 @@ export default function Home() {
       const userId = session?.user?.id;
 
       if (userId) {
-        // Save the user's message (with emotion score)
-        const { error: userMessageError } = await supabase
-          .from("messages")
-          .insert({
-            user_id: userId,
-            role: "user",
-            content: userMessage.content,
-            emotion_score: detectedEmotionScore,
-            personality_profile: userPersonalityProfile, // Save user's current profile with their message
-          });
-
-        if (userMessageError) {
-          console.error("❌ Failed to save user message:", userMessageError.message);
+        // --- NEW: Create chat session if it's the first message in a new session ---
+        // This logic ensures the session is saved when the first user message comes in.
+        const sessionExists = chatSessions.some(s => s.id === activeChatSessionId);
+        if (!sessionExists) {
+          const { error: sessionInsertError } = await supabase
+            .from("chat_sessions")
+            .insert({
+              id: activeChatSessionId,
+              user_id: userId,
+              title: "New Chat", // Initial title, will be updated later
+              created_at: new Date().toISOString(),
+            });
+          if (sessionInsertError) {
+            console.error("❌ Failed to create chat session:", sessionInsertError.message);
+          } else {
+            console.log("New chat session created:", activeChatSessionId);
+            // Add the new session to state
+            setChatSessions(prev => [{ id: activeChatSessionId, title: "New Chat", created_at: new Date().toISOString() }, ...prev]);
+          }
         }
 
-        // Save the assistant's response
+        // 1. If editing, delete all messages after the original user message from DB
+        // This is crucial to maintain conversation integrity after an edit.
+        if (originalUserMessageCreatedAt) {
+          const { error: deleteError } = await supabase
+            .from("messages")
+            .delete()
+            .eq('user_id', userId)
+            .eq('chat_session_id', activeChatSessionId) // Delete only from the active session
+            .gte('created_at', originalUserMessageCreatedAt); // Delete messages from this timestamp onwards
+
+          if (deleteError) {
+            console.error("❌ Failed to clear subsequent messages in DB:", deleteError.message);
+          } else {
+            console.log("Subsequent messages cleared from database after edit.");
+          }
+        }
+
+        // 2. Save/Update the user's message (with emotion score, personality profile, and a fresh timestamp)
+        // Use upsert to either insert new or update existing based on ID
+        const { error: userMessageError } = await supabase
+          .from("messages")
+          .upsert({
+            id: userMessageToProcess.id, // Use the existing ID for upsert
+            user_id: userId,
+            role: "user",
+            content: finalUserMessage.content,
+            emotion_score: finalUserMessage.emotion_score,
+            personality_profile: userPersonalityProfile,
+            created_at: finalUserMessage.created_at, // Use the new timestamp
+            chat_session_id: activeChatSessionId, // --- SAVE CHAT SESSION ID ---
+          }, { onConflict: 'id' }); // Conflict on 'id' to update existing row
+
+        if (userMessageError) {
+          console.error("❌ Failed to save/update user message:", userMessageError.message);
+        }
+
+        // 3. Save the new assistant's response
         const { error: assistantMessageError } = await supabase
           .from("messages")
           .insert({
             user_id: userId,
             role: "assistant",
             content: accumulatedAssistantResponse,
+            created_at: new Date().toISOString(), // New timestamp for assistant message
+            chat_session_id: activeChatSessionId, // --- SAVE CHAT SESSION ID ---
           });
 
         if (assistantMessageError) {
           console.error("❌ Failed to save assistant message:", assistantMessageError.message);
         }
+
+        // --- NEW: Automatically title the chat session after the first message pair ---
+        // This will only run for the first message of a new session
+        if (messages.length === 0 && !originalUserMessageCreatedAt) { // If it was a new chat and not an edit
+          const generatedTitle = accumulatedAssistantResponse.substring(0, 50).split('\n')[0].trim(); // Take first 50 chars of assistant's response
+          const newTitle = generatedTitle.length > 0 ? generatedTitle : "New Chat";
+
+          const { error: titleUpdateError } = await supabase
+            .from("chat_sessions")
+            .update({ title: newTitle })
+            .eq('id', activeChatSessionId);
+
+          if (titleUpdateError) {
+            console.error("❌ Failed to update chat session title:", titleUpdateError.message);
+          } else {
+            console.log("Chat session title updated:", newTitle);
+            setChatSessions(prev => prev.map(session =>
+              session.id === activeChatSessionId ? { ...session, title: newTitle } : session
+            ));
+          }
+        }
+
       } else {
         console.warn("User ID not available, messages not saved to DB.");
       }
@@ -334,7 +442,6 @@ export default function Home() {
       console.error("❌ Chat submission error:", err.message);
       setMessages((prev) => {
         const updatedMessages = [...prev];
-        // Find and update the placeholder assistant message with the error
         const assistantMsgIndex = updatedMessages.findIndex(msg => msg.id === assistantPlaceholderId);
         if (assistantMsgIndex !== -1) {
           updatedMessages[assistantMsgIndex] = {
@@ -347,74 +454,241 @@ export default function Home() {
             role: "assistant",
             content: `⚠️ An unexpected error occurred. Please try again.`,
             id: crypto.randomUUID(),
+            chat_session_id: activeChatSessionId || crypto.randomUUID(), // Fallback for session ID
           });
         }
         return updatedMessages;
       });
     } finally {
       setIsLoading(false);
+      setIsRegenerating(false); // Clear regenerating state
     }
   };
 
-  // --- Handler for resetting the conversation ---
+  // --- Handler for submitting a new chat message or an edited message ---
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) {
+      return;
+    }
+
+    // Ensure there's an active chat session. If not, create one.
+    if (!activeChatSessionId) {
+      const newSessionId = crypto.randomUUID();
+      setActiveChatSessionId(newSessionId);
+      // Temporarily add to chatSessions state so it's available for saving
+      // It will be fully persisted with a title on the first message.
+      setChatSessions(prev => [{ id: newSessionId, title: "New Chat", created_at: new Date().toISOString() }, ...prev]);
+    }
+
+    let userMessageToProcess: ChatMessage;
+    let currentMessagesForContext: ChatMessage[];
+    let originalUserMessageCreatedAt: string | undefined;
+
+    if (editingMessageId) {
+      // Logic for editing an existing message
+      setIsRegenerating(true);
+      const originalMessageIndex = messages.findIndex(msg => msg.id === editingMessageId && msg.role === 'user');
+      if (originalMessageIndex === -1) {
+        console.error("Attempted to edit a user message not found.");
+        setEditingMessageId(null);
+        return;
+      }
+      // Create the updated user message object
+      userMessageToProcess = {
+        ...messages[originalMessageIndex],
+        content: input.trim(),
+        chat_session_id: activeChatSessionId!, // Ensure session ID is propagated
+        // emotion_score might need to be re-calculated by API, but we don't clear it here.
+        // created_at is preserved from original for DB deletion logic, but will be updated for DB upsert later.
+      };
+      originalUserMessageCreatedAt = messages[originalMessageIndex].created_at;
+
+      // Truncate the messages array to include only messages up to the edited user message
+      // This forms the new 'history' context for the API call
+      currentMessagesForContext = messages.slice(0, originalMessageIndex + 1).map(msg =>
+        msg.id === editingMessageId ? userMessageToProcess : msg // Ensure the edited message is in the context
+      );
+
+      // Immediately update the UI to show the edited message and remove subsequent messages
+      setMessages(currentMessagesForContext);
+
+      setEditingMessageId(null); // Clear editing state
+      setInput(""); // Clear input field
+
+    } else {
+      // Logic for sending a brand new message
+      userMessageToProcess = {
+        role: "user",
+        content: input.trim(),
+        id: crypto.randomUUID(), // Assign a new unique ID
+        created_at: new Date().toISOString(), // Assign an initial timestamp
+        chat_session_id: activeChatSessionId!, // --- ASSIGN CHAT SESSION ID ---
+      };
+      // For a new message, the context is all current messages plus the new one
+      currentMessagesForContext = [...messages, userMessageToProcess];
+      // Add user message to UI immediately
+      setMessages(currentMessagesForContext);
+      setInput(""); // Clear input immediately
+    }
+
+    // Add a placeholder for the assistant's response in the UI
+    const assistantPlaceholderId = crypto.randomUUID();
+    setMessages((prev) => [...prev, { role: "assistant", content: "", id: assistantPlaceholderId, chat_session_id: activeChatSessionId! }]);
+
+    // Call the refactored function to handle API communication and DB persistence
+    await sendToApiAndSave(currentMessagesForContext, userMessageToProcess, assistantPlaceholderId, originalUserMessageCreatedAt);
+  };
+
+  // --- Handler for editing a specific message ---
+  const handleEditMessage = (messageId: string) => {
+    if (isLoading) {
+      alert("Please wait for the current response to complete before editing.");
+      return;
+    }
+    const messageToEdit = messages.find(msg => msg.id === messageId && msg.role === 'user');
+    if (messageToEdit) {
+      setEditingMessageId(messageId);
+      setInput(messageToEdit.content);
+      textareaRef.current?.focus(); // Focus the textarea
+      textareaRef.current?.setSelectionRange(messageToEdit.content.length, messageToEdit.content.length); // Move cursor to end
+    }
+  };
+
+  // --- Handler for resetting the current conversation (and making it a 'new chat') ---
   const handleReset = async () => {
     if (isLoading) {
-      // Using a simple alert for now as per previous instruction to avoid custom modals for this specific case.
-      // In a real app, a custom modal would be preferred.
       alert("Please wait for the current response to complete before resetting.");
       return;
     }
     setMessages([]); // Clear client-side messages immediately
     setIsSidebarOpen(false); // Close sidebar on reset
+    setEditingMessageId(null); // Clear editing state on reset
 
-    try {
-      // Send a request to the backend to clear server-side history/context
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reset: true }),
-      });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(`HTTP error! status: ${res.status}, Message: ${errorData.response || 'Unknown error'}`);
-      }
-      console.log("Conversation history reset on server and client.");
+    // Generate a new session ID for the 'new chat'
+    const newSessionId = crypto.randomUUID();
+    setActiveChatSessionId(newSessionId);
 
-      // Also clear messages from Supabase for the current user
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id) {
-        const { error: deleteError } = await supabase
-          .from("messages")
-          .delete()
-          .eq('user_id', session.user.id);
+    // No need to explicitly delete old messages from DB here for a "reset" that means "start a new chat".
+    // The old messages will remain associated with their previous chat_session_id.
+    // The API will handle the context based on the provided activeChatSessionId.
+    console.log(`Starting new conversation with session ID: ${newSessionId}`);
+    // The new session will be created in the DB when the first message is sent to it.
 
-        if (deleteError) {
-          console.error("❌ Failed to clear user's messages in DB:", deleteError.message);
-          alert(`Failed to clear past messages from database: ${deleteError.message}`);
-        } else {
-          console.log("User's past messages cleared from database.");
-        }
-      }
-
-    } catch (err: any) {
-      console.error("❌ Failed to reset conversation on server or clear DB:", err.message);
-      alert(`Failed to reset conversation: ${err.message}. Messages may not have been fully cleared.`);
-    }
+    // If we want to *force* the API to forget previous context (even if not explicitly sending reset:true),
+    // we rely on the `chatSessionId` being sent.
   };
 
   // --- Handler for starting a new chat (client-side and server-side reset) ---
   const handleNewChat = () => {
-    handleReset(); // A new chat implicitly means resetting the current one
+    handleReset(); // A new chat implicitly means resetting the current one (starting a fresh session ID)
   };
+
+  // --- NEW: Handler for switching to an existing chat session ---
+  const handleSwitchChatSession = useCallback(async (sessionId: string) => {
+    if (isLoading) {
+      alert("Please wait for the current response to complete before switching chats.");
+      return;
+    }
+    if (sessionId === activeChatSessionId) {
+      setIsSidebarOpen(false); // Just close sidebar if already on this chat
+      return;
+    }
+
+    setIsLoading(true); // Indicate loading for chat switch
+    setMessages([]); // Clear current messages while loading new ones
+    setActiveChatSessionId(sessionId); // Set the new active session
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+
+    if (userId) {
+      const { data, error: fetchError } = await supabase
+        .from("messages")
+        .select("id, role, content, emotion_score, personality_profile, created_at, chat_session_id")
+        .eq('user_id', userId)
+        .eq('chat_session_id', sessionId) // Fetch messages for the selected session ID
+        .order("created_at", { ascending: true });
+
+      if (fetchError) {
+        console.error(`❌ Failed to load history for session ${sessionId}:`, fetchError.message);
+        setMessages([{ role: "assistant", content: "Failed to load chat history. Please try again.", id: crypto.randomUUID(), chat_session_id: sessionId }]);
+      } else {
+        setMessages(data as ChatMessage[]);
+      }
+    } else {
+      console.warn("User ID not available, cannot load chat history.");
+      setMessages([{ role: "assistant", content: "Not logged in. Cannot load chat history.", id: crypto.randomUUID(), chat_session_id: sessionId }]);
+    }
+    setIsLoading(false);
+    setIsSidebarOpen(false); // Close sidebar after switching
+  }, [isLoading, activeChatSessionId]); // Add activeChatSessionId to dependencies to avoid stale closure
+
+  // --- NEW: Handler for deleting a chat session ---
+  const handleDeleteChatSession = useCallback(async (sessionIdToDelete: string) => {
+    if (isLoading) {
+      alert("Please wait for the current response to complete before deleting chats.");
+      return;
+    }
+    if (!confirm("Are you sure you want to delete this chat session and all its messages? This cannot be undone.")) {
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+
+      if (userId) {
+        // First, delete all messages associated with this chat_session_id
+        const { error: messagesDeleteError } = await supabase
+          .from("messages")
+          .delete()
+          .eq('user_id', userId)
+          .eq('chat_session_id', sessionIdToDelete);
+
+        if (messagesDeleteError) {
+          throw new Error(`Failed to delete messages: ${messagesDeleteError.message}`);
+        }
+
+        // Then, delete the chat session itself
+        const { error: sessionDeleteError } = await supabase
+          .from("chat_sessions")
+          .delete()
+          .eq('user_id', userId)
+          .eq('id', sessionIdToDelete);
+
+        if (sessionDeleteError) {
+          throw new Error(`Failed to delete chat session: ${sessionDeleteError.message}`);
+        }
+
+        // Update UI state
+        setChatSessions(prev => prev.filter(session => session.id !== sessionIdToDelete));
+        if (activeChatSessionId === sessionIdToDelete) {
+          // If the deleted session was the active one, start a new chat
+          handleNewChat();
+        }
+        console.log(`Chat session ${sessionIdToDelete} and its messages deleted.`);
+      } else {
+        console.warn("User ID not available, cannot delete chat session.");
+        alert("Error: User not logged in. Cannot delete chat session.");
+      }
+    } catch (err: any) {
+      console.error("❌ Error deleting chat session:", err.message);
+      alert(`Failed to delete chat session: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, activeChatSessionId, handleNewChat]); // Add handleNewChat as a dependency
 
   // --- Handler for user logout ---
   const handleLogout = async () => {
-    // Perform Supabase sign out first for consistency
     const { error } = await supabase.auth.signOut();
     if (error) {
       console.error("❌ Error signing out:", error.message);
       alert(`Error signing out: ${error.message}`);
-      return; // Prevent redirect if sign out failed
+      return;
     }
     router.push("/sign-out"); // Redirect to a sign-out confirmation or login page
   };
@@ -422,7 +696,13 @@ export default function Home() {
   // --- Utility function to copy text to clipboard ---
   const copyToClipboard = async (text: string, messageId: string) => {
     try {
-      // Using document.execCommand('copy') as navigator.clipboard.writeText() might be restricted in iframes
+      await navigator.clipboard.writeText(text); // Modern approach
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 2000); // Reset icon after 2 seconds
+    } catch (err) {
+      console.error("📋 Copy failed", err);
+      // Fallback for older browsers or restricted environments
+      // This is generally not needed for modern browsers in secure contexts.
       const textarea = document.createElement('textarea');
       textarea.value = text;
       textarea.style.position = 'fixed'; // Avoid scrolling to bottom
@@ -433,11 +713,7 @@ export default function Home() {
       document.body.removeChild(textarea);
 
       setCopiedMessageId(messageId);
-      setTimeout(() => setCopiedMessageId(null), 2000); // Reset icon after 2 seconds
-    } catch (err) {
-      console.error("📋 Copy failed", err);
-      // Fallback for older browsers or restricted environments
-      alert("Failed to copy text. Please try again or copy manually.");
+      setTimeout(() => setCopiedMessageId(null), 2000);
     }
   };
 
@@ -498,7 +774,7 @@ export default function Home() {
       {/* Sidebar */}
       <div
         className={`fixed inset-y-0 left-0 w-64 bg-[#0A0B1A] border-r border-[#1a213a] z-50 transform ${
-          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+          isSidebarOpen ? "translate-x-0 w-full md:w-64" : "-translate-x-full" // w-full on small screens when open
         } transition-transform duration-300 ease-in-out flex flex-col`}
       >
         <div className="p-4 flex items-center justify-start border-b border-[#1a213a]">
@@ -518,15 +794,39 @@ export default function Home() {
           >
             <MessageSquarePlus size={20} /> New Chat
           </button>
-          {/* Placeholder for recent chats - will be functional later */}
+          {/* Placeholder for recent chats - NOW DYNAMICALLY LOADED */}
           <div className="mt-4 text-gray-400 text-sm px-4">Recent</div>
-          {/* Example of a recent chat item (static for now) */}
-          <button
-            disabled
-            className="flex items-center gap-3 px-4 py-2 rounded-lg text-left text-gray-500 cursor-not-allowed text-base"
-          >
-            <MessageSquarePlus size={20} /> Old Chat Title (soon)
-          </button>
+          {chatSessions.length > 0 ? (
+            <div className="flex flex-col gap-1 overflow-y-auto custom-scrollbar">
+              {chatSessions.map((session) => (
+                <div key={session.id} className="relative group">
+                  <button
+                    onClick={() => handleSwitchChatSession(session.id)}
+                    className={`flex items-center gap-3 px-4 py-2 pr-10 rounded-lg text-left transition-colors text-base w-full overflow-hidden text-ellipsis whitespace-nowrap ${
+                      activeChatSessionId === session.id
+                        ? "bg-blue-700 text-white font-semibold"
+                        : "text-gray-300 hover:bg-[#1a213a] hover:text-white"
+                    }`}
+                  >
+                    <MessageSquarePlus size={20} /> {session.title}
+                  </button>
+                  {/* Delete button for chat session */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent activating switch chat session
+                      handleDeleteChatSession(session.id);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-gray-400 hover:text-red-400 hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Delete chat session"
+                  >
+                    <Eraser size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-4 py-2 text-gray-500 text-sm italic">No recent chats.</p>
+          )}
         </nav>
         <div className="p-4 border-t border-[#1a213a] flex flex-col gap-2">
           {/* User Profile Section */}
@@ -580,7 +880,7 @@ export default function Home() {
       {/* Main Content Area */}
       <div
         className={`flex-1 flex flex-col transition-all duration-300 ease-in-out ${
-          isSidebarOpen ? "ml-64" : "ml-0"
+          isSidebarOpen ? "md:ml-64" : "ml-0" // Apply margin only on medium screens and up
         }`}
       >
         <header className="p-4 flex items-center gap-4 border-b border-[#1a213a] bg-[#0A0B1A] shadow-lg">
@@ -635,7 +935,7 @@ export default function Home() {
                 )}
 
                 {/* Assistant thinking indicator */}
-                {msg.role === "assistant" && msg.content === "" && isLoading ? (
+                {msg.role === "assistant" && msg.content === "" && (isLoading || isRegenerating) ? (
                   <div className="flex items-center gap-2 py-1"> {/* Added padding for alignment */}
                     <Loader2 className="animate-spin text-blue-400" size={20} />
                     <span className="animate-typing-dots text-lg text-gray-300">Quirra is thinking...</span>
@@ -709,19 +1009,31 @@ export default function Home() {
                     >
                       {msg.content}
                     </ReactMarkdown>
-                    {/* Copy button for all messages */}
-                    {msg.content !== "" && ( // Only show copy if content is not empty (i.e., not the thinking state)
-                      <button
-                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white transition-opacity duration-200"
-                        onClick={() => copyToClipboard(msg.content, `msg-${msg.id}`)}
-                        title="Copy message"
-                      >
-                        {copiedMessageId === `msg-${msg.id}` ? (
-                          <Check size={16} className="text-green-400" />
-                        ) : (
-                          <Copy size={16} />
+                    {/* Copy and Edit buttons for all messages */}
+                    {msg.content !== "" && ( // Only show buttons if content is not empty (i.e., not the thinking state)
+                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity duration-200">
+                        {msg.role === 'user' && ( // Only show edit for user messages
+                          <button
+                            className="p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
+                            onClick={() => handleEditMessage(msg.id)}
+                            title="Edit message"
+                            disabled={isLoading}
+                          >
+                            <Edit size={16} />
+                          </button>
                         )}
-                      </button>
+                        <button
+                          className="p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
+                          onClick={() => copyToClipboard(msg.content, `msg-${msg.id}`)}
+                          title="Copy message"
+                        >
+                          {copiedMessageId === `msg-${msg.id}` ? (
+                            <Check size={16} className="text-green-400" />
+                          ) : (
+                            <Copy size={16} />
+                          )}
+                        </button>
+                      </div>
                     )}
                   </Fragment>
                 )}
@@ -748,8 +1060,8 @@ export default function Home() {
                 }
               }}
               rows={1}
-              placeholder={isLoading ? "Quirra is typing..." : "Ask Quirra anything..."}
-              className="w-full resize-none bg-[#1a213a] rounded-xl py-3 pl-4 pr-12 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar overflow-y-hidden text-base max-h-40"
+              placeholder={isLoading ? "Quirra is typing..." : editingMessageId ? "Editing message..." : "Ask Quirra anything..."}
+              className="w-full resize-none bg-[#1a213a] rounded-xl py-3 pl-4 pr-12 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar text-base max-h-[120px]" // max-h-[120px] for ~5 lines before scroll
               disabled={isLoading}
             />
             {/* Send button inside the textarea container */}
@@ -760,10 +1072,10 @@ export default function Home() {
                 disabled={!input.trim() || isLoading}
                 aria-label="Send message"
               >
-                {isLoading ? (
+                {(isLoading || isRegenerating) ? (
                   <Loader2 className="animate-spin" size={20} />
                 ) : (
-                  <Send size={20} className="rotate-0 transition-transform duration-200" /> // Removed -rotate-45 for horizontal
+                  <Send size={20} className="rotate-0 transition-transform duration-200" />
                 )}
               </button>
             )}
