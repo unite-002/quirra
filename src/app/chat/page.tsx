@@ -40,7 +40,7 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   emotion_score?: number; // Detected emotion from API for user messages
-  personality_profile?: Record<string, string>; // User's profile, saved with user messages (historical)
+  personality_profile?: PersonalityProfile; // User's profile, saved with user messages (historical)
   id: string; // Add a unique ID for each message for better keying and copying
 };
 
@@ -48,13 +48,13 @@ interface PersonalityProfile {
   learning_style: string;
   communication_preference: string;
   feedback_preference: string;
+  preferred_name: string | null; // Added preferred_name to the interface
 }
 
 // Define a type for the user's general profile data (username, full name)
 interface UserProfileData {
   username: string | null;
   full_name: string | null;
-  preferred_name?: string | null; // Optional, if you add this specifically to your DB
   personality_profile: PersonalityProfile | null; // Include this here for direct access
 }
 
@@ -113,7 +113,11 @@ export default function Home() {
     let resolvedDisplayUserName: string;
     let resolvedChatbotUserName: string;
 
-    if (profileData?.full_name) {
+    // Prioritize preferred_name from personality_profile
+    if (profileData?.personality_profile?.preferred_name) {
+      resolvedDisplayUserName = profileData.personality_profile.preferred_name;
+      resolvedChatbotUserName = profileData.personality_profile.preferred_name;
+    } else if (profileData?.full_name) {
       resolvedDisplayUserName = profileData.full_name;
       resolvedChatbotUserName = profileData.full_name.split(' ')[0]; // Use first name from full_name
     } else if (profileData?.username) {
@@ -217,7 +221,7 @@ export default function Home() {
         body: JSON.stringify({
           prompt: userMessage.content,
           userName: chatbotUserName, // Pass the chatbot-specific user name
-          personalityProfile: userPersonalityProfile,
+          personalityProfile: userPersonalityProfile, // Pass the user's personality profile
         }),
       });
 
@@ -482,7 +486,7 @@ export default function Home() {
   // --- Conditional Rendering: Personality Onboarding ---
   if (!userPersonalityProfile) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#0A0B1A] flex items-center justify-center p-4">
         <PersonalityOnboarding onComplete={handleOnboardingComplete} />
       </div>
     );
@@ -538,6 +542,11 @@ export default function Home() {
           )}
           {userPersonalityProfile && (
             <div className="flex flex-col gap-1 px-4 py-2 rounded-lg text-left text-gray-400 text-sm">
+              {userPersonalityProfile.preferred_name && (
+                <p>
+                  <b>Call me:</b> <span className="text-gray-200">{userPersonalityProfile.preferred_name}</span>
+                </p>
+              )}
               <p>
                 <b>Learning:</b> <span className="text-gray-200 capitalize">{userPersonalityProfile.learning_style.replace(/_/g, ' ')}</span>
               </p>

@@ -1,4 +1,4 @@
-// components/PersonalityOnboarding.tsx
+// src/components/PersonalityOnboarding.tsx (UPDATED with Preferred Name)
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -11,12 +11,15 @@ interface PersonalityProfile {
   learning_style: string;
   communication_preference: string;
   feedback_preference: string;
+  preferred_name: string | null; // Added preferred_name
 }
 
 interface PersonalityOption {
   value: string;
   label: string;
   description: string;
+  tone?: string; // Optional tone for preview
+  suggestions?: string[]; // Optional suggestions for preview
   icon?: React.ReactNode;
 }
 
@@ -102,6 +105,17 @@ const personalityData = {
         "What's a good way to stay motivated when learning new things?",
       ],
     },
+    {
+      value: "interactive", // Added the missing 4th option
+      label: "Interactive & Conversational",
+      description: "You prefer a back-and-forth, dynamic conversation style.",
+      tone: "💬 Let's have a lively chat and explore ideas together!",
+      suggestions: [
+        "Ask me questions to help me think.",
+        "Let's brainstorm some ideas.",
+        "What are your thoughts on this?",
+      ],
+    },
   ],
   feedback_preferences: [
     {
@@ -137,10 +151,21 @@ const personalityData = {
         "Help me understand where I went wrong without being too harsh.",
       ],
     },
+    {
+      value: "summary", // Added the missing 4th option
+      label: "Summary & Overview",
+      description: "You prefer a high-level summary of feedback rather than detailed points.",
+      tone: "📝 I'll give you the highlights and main takeaways from your performance.",
+      suggestions: [
+        "Give me a quick summary of my progress.",
+        "What's the overall impression of my work?",
+        "Just tell me the main points I need to know.",
+      ],
+    },
   ],
 };
 
-type OnboardingStep = "learning_style" | "communication_preference" | "feedback_preference" | "done";
+type OnboardingStep = "learning_style" | "communication_preference" | "feedback_preference" | "preferred_name"; // Added "preferred_name" step
 
 export function PersonalityOnboarding({
   onComplete,
@@ -153,70 +178,53 @@ export function PersonalityOnboarding({
   const [selectedLearningStyle, setSelectedLearningStyle] = useState<string | null>(null);
   const [selectedCommunicationPreference, setSelectedCommunicationPreference] = useState<string | null>(null);
   const [selectedFeedbackPreference, setSelectedFeedbackPreference] = useState<string | null>(null);
+  const [preferredName, setPreferredName] = useState<string>(""); // New state for preferred name
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quirraTone, setQuirraTone] = useState<string>("Welcome to Quirra! Let's get to know each other.");
   const [quirraSuggestions, setQuirraSuggestions] = useState<string[]>([]);
-  const [onboardingCompleteMessage, setOnboardingCompleteMessage] = useState<string | null>(null);
 
-  // Effect to set initial values and potentially skip steps if a profile already exists
+  // Effect to set initial values from initialProfile
   useEffect(() => {
     if (initialProfile) {
       setSelectedLearningStyle(initialProfile.learning_style);
       setSelectedCommunicationPreference(initialProfile.communication_preference);
       setSelectedFeedbackPreference(initialProfile.feedback_preference);
-
-      // If all preferences are already set, jump directly to the "done" state
-      // This is ideal for returning users who are simply checking their settings.
-      if (initialProfile.learning_style && initialProfile.communication_preference && initialProfile.feedback_preference) {
-        setCurrentStep("done");
-      }
+      setPreferredName(initialProfile.preferred_name || ""); // Set initial preferred name
+      // No "done" state transition here. Component always starts interactive.
     }
-  }, [initialProfile]); // Dependency on initialProfile ensures it reacts to changes
+  }, [initialProfile]);
 
   // Effect to dynamically update Quirra's tone and suggestions based on selections
   useEffect(() => {
     let tone = "Welcome to Quirra! Let's get to know each other.";
     const currentSuggestions: string[] = [];
 
-    // Prioritize specific tones/suggestions based on selected preferences.
-    // For this demonstration, the last selected preference's tone overrides previous ones.
     if (selectedLearningStyle) {
       const style = personalityData.learning_styles.find(s => s.value === selectedLearningStyle);
       if (style) {
-        tone = style.tone;
-        currentSuggestions.push(...style.suggestions);
+        tone = style.tone || tone; // Use selected tone, fallback to current
+        currentSuggestions.push(...style.suggestions || []);
       }
     }
     if (selectedCommunicationPreference) {
       const comm = personalityData.communication_preferences.find(c => c.value === selectedCommunicationPreference);
       if (comm) {
-        tone = comm.tone;
-        currentSuggestions.push(...comm.suggestions);
+        tone = comm.tone || tone; // Use selected tone, fallback to current
+        currentSuggestions.push(...comm.suggestions || []);
       }
     }
     if (selectedFeedbackPreference) {
       const fb = personalityData.feedback_preferences.find(f => f.value === selectedFeedbackPreference);
       if (fb) {
-        tone = fb.tone;
-        currentSuggestions.push(...fb.suggestions);
+        tone = fb.tone || tone; // Use selected tone, fallback to current
+        currentSuggestions.push(...fb.suggestions || []);
       }
     }
 
     setQuirraTone(tone);
     setQuirraSuggestions(currentSuggestions);
-
-    // Generate the completion message when in the "done" step
-    if (currentStep === "done") {
-      const finalLearningStyle = personalityData.learning_styles.find(s => s.value === selectedLearningStyle)?.label || 'your chosen style';
-      const finalCommPreference = personalityData.communication_preferences.find(c => c.value === selectedCommunicationPreference)?.label || 'your preferred communication';
-      const finalFeedbackPreference = personalityData.feedback_preferences.find(f => f.value === selectedFeedbackPreference)?.label || 'your feedback preference';
-
-      setOnboardingCompleteMessage(
-        `Great! I understand you're a **${finalLearningStyle}**, you prefer **${finalCommPreference}** communication, and you like **${finalFeedbackPreference}** feedback. I'm ready to learn and adapt to your unique needs! Let's begin!`
-      );
-    }
-  }, [selectedLearningStyle, selectedCommunicationPreference, selectedFeedbackPreference, currentStep]);
+  }, [selectedLearningStyle, selectedCommunicationPreference, selectedFeedbackPreference]);
 
   // Handle proceeding to the next step or completing the setup
   const handleNextStep = useCallback(async () => {
@@ -235,6 +243,7 @@ export function PersonalityOnboarding({
       setError("Please select your feedback preference.");
       return;
     }
+    // No specific validation for preferred_name, as it's optional
 
     // Advance to the next step in the flow
     if (currentStep === "learning_style") {
@@ -242,6 +251,8 @@ export function PersonalityOnboarding({
     } else if (currentStep === "communication_preference") {
       setCurrentStep("feedback_preference");
     } else if (currentStep === "feedback_preference") {
+      setCurrentStep("preferred_name"); // Move to the new preferred name step
+    } else if (currentStep === "preferred_name") {
       // Last step: Save profile to Supabase
       setLoading(true);
       try {
@@ -256,6 +267,7 @@ export function PersonalityOnboarding({
           learning_style: selectedLearningStyle!,
           communication_preference: selectedCommunicationPreference!,
           feedback_preference: selectedFeedbackPreference!,
+          preferred_name: preferredName.trim() === "" ? null : preferredName.trim(), // Save as null if empty
         };
 
         // Upsert (insert or update) the personality profile in the 'profiles' table
@@ -267,9 +279,8 @@ export function PersonalityOnboarding({
           console.error("Error saving personality profile:", dbError);
           setError(`Failed to save your profile: ${dbError.message}`);
         } else {
-          // Store in localStorage for quick access if needed elsewhere without a database call
           localStorage.setItem('quirra_personality_profile', JSON.stringify(profileToSave));
-          setCurrentStep("done"); // Transition to the success state
+          onComplete(profileToSave); // Signal parent to redirect
         }
       } catch (err: any) {
         console.error("Unexpected error during profile save:", err);
@@ -278,7 +289,7 @@ export function PersonalityOnboarding({
         setLoading(false);
       }
     }
-  }, [currentStep, selectedLearningStyle, selectedCommunicationPreference, selectedFeedbackPreference]); // Dependencies for useCallback
+  }, [currentStep, selectedLearningStyle, selectedCommunicationPreference, selectedFeedbackPreference, preferredName, onComplete]);
 
   // Helper function to render options for each step, promoting reusability
   const renderOptions = (options: PersonalityOption[], selectedValue: string | null, onSelect: (value: string) => void) => (
@@ -287,7 +298,6 @@ export function PersonalityOnboarding({
         <button
           key={option.value}
           onClick={() => onSelect(option.value)}
-          // Dynamic styling for selected vs. unselected options
           className={`p-4 rounded-lg border-2 text-left transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 ${
             selectedValue === option.value
               ? "bg-blue-700 border-blue-500 text-white shadow-lg"
@@ -313,7 +323,7 @@ export function PersonalityOnboarding({
 
       <div className="flex-1 flex flex-col justify-between">
         {/* Main content area for each step */}
-        <div className="mb-8 min-h-[250px] flex flex-col justify-center"> {/* Added min-h for consistent layout */}
+        <div className="mb-8 min-h-[250px] flex flex-col justify-center">
           {currentStep === "learning_style" && (
             <div className="space-y-4">
               <h3 className="text-xl font-semibold text-gray-100">How do you learn best?</h3>
@@ -335,18 +345,17 @@ export function PersonalityOnboarding({
             </div>
           )}
 
-          {currentStep === "done" && (
-            <div className="flex flex-col items-center justify-center text-center space-y-4 animate-fadeIn">
-              <CheckCircle2 size={64} className="text-green-400" />
-              <p className="text-2xl font-bold text-white">Setup Complete!</p>
-              <p className="text-lg text-gray-300 max-w-md">
-                {onboardingCompleteMessage && (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {onboardingCompleteMessage}
-                  </ReactMarkdown>
-                )}
-              </p>
-              <p className="text-md text-gray-400 mt-4">You're all set to experience Quirra's personalized assistance.</p>
+          {currentStep === "preferred_name" && (
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-100">What name would you like Quirra to call you? (Optional)</h3>
+              <input
+                type="text"
+                value={preferredName}
+                onChange={(e) => setPreferredName(e.target.value)}
+                placeholder="e.g., Alex, Dr. Smith, Commander"
+                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-sm text-gray-400">If left blank, Quirra will use your username or full name.</p>
             </div>
           )}
 
@@ -360,48 +369,45 @@ export function PersonalityOnboarding({
         </div>
 
         {/* Quirra's dynamic tone preview */}
-        {currentStep !== "done" && (
-          <div className="bg-[#1a213a] p-4 rounded-lg border border-[#2a304e] flex items-center gap-4 text-gray-300 mt-auto">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white">
-              Q
-            </div>
-            <p className="italic flex-1">
-              {quirraTone}
-            </p>
+        <div className="bg-[#1a213a] p-4 rounded-lg border border-[#2a304e] flex items-center gap-4 text-gray-300 mt-auto">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white">
+            Q
           </div>
-        )}
+          <p className="italic flex-1">
+            {quirraTone}
+          </p>
+        </div>
 
         {/* Action buttons */}
-        {currentStep === "done" ? (
+        <div className="flex justify-between w-full mt-8">
           <button
-            onClick={() => onComplete({
-              learning_style: selectedLearningStyle!,
-              communication_preference: selectedCommunicationPreference!,
-              feedback_preference: selectedFeedbackPreference!,
-            })}
-            className="mt-6 w-full py-3 px-6 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
-            disabled={loading}
+            onClick={() => {
+              if (currentStep === "preferred_name") setCurrentStep("feedback_preference");
+              else if (currentStep === "feedback_preference") setCurrentStep("communication_preference");
+              else if (currentStep === "communication_preference") setCurrentStep("learning_style");
+            }}
+            disabled={currentStep === "learning_style" || loading}
+            className="px-6 py-3 bg-gray-600 text-white font-semibold rounded-lg hover:bg-gray-700 transition duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Start Chatting!
-            {loading && <Loader2 className="animate-spin ml-2" size={20} />}
+            Previous
           </button>
-        ) : (
           <button
             onClick={handleNextStep}
-            className="mt-6 w-full py-3 px-6 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
+            className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center gap-2 text-lg"
             disabled={loading ||
               (currentStep === "learning_style" && !selectedLearningStyle) ||
               (currentStep === "communication_preference" && !selectedCommunicationPreference) ||
               (currentStep === "feedback_preference" && !selectedFeedbackPreference)
+              // Preferred name is optional, so no disable based on its value
             }
           >
             {loading ? (
               <Loader2 className="animate-spin" size={20} />
             ) : (
-              currentStep === "feedback_preference" ? "Complete Setup" : "Next"
+              currentStep === "preferred_name" ? "Save Preferences" : "Next"
             )}
           </button>
-        )}
+        </div>
       </div>
     </div>
   );
