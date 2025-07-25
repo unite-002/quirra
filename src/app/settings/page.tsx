@@ -30,42 +30,33 @@ export default function SettingsPage() {
     setDeleteChatMessage(null);
 
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      // Call the new API route to delete all chat history and sessions
+      const response = await fetch('/api/delete-all-history', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        // No need to send user_id here, the API route will get it from the session
+      });
 
-      if (sessionError || !session?.user?.id) {
-        console.error("Error getting user session for deletion:", sessionError?.message || "User not logged in.");
-        setDeleteChatMessage("Error: Could not retrieve user. Please log in again.");
-        setDeleteChatLoading(false);
-        return;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete history on server.');
       }
 
-      const user_id = session.user.id;
+      console.log("Chat history and sessions deleted successfully via API.");
+      setDeleteChatMessage("Chat history and sessions deleted successfully!");
+      
+      // After successful deletion, force a refresh of the chat page to clear client-side state
+      // and redirect to a new, empty chat.
+      setTimeout(() => {
+        router.push("/chat");
+        router.refresh(); // Important for Next.js App Router to re-fetch data
+      }, 1500);
 
-      // Delete messages
-      const { error: deleteMessagesError } = await supabase
-        .from('messages')
-        .delete()
-        .eq('user_id', user_id);
-
-      // Also delete memory associated with the user
-      const { error: deleteMemoryError } = await supabase
-        .from('memory')
-        .delete()
-        .eq('user_id', user_id);
-
-      if (deleteMessagesError || deleteMemoryError) {
-        console.error("Failed to delete chat history or memory:", deleteMessagesError?.message || deleteMemoryError?.message);
-        setDeleteChatMessage(`Failed to delete history: ${deleteMessagesError?.message || deleteMemoryError?.message}`);
-      } else {
-        console.log("Chat history and memory deleted successfully.");
-        setDeleteChatMessage("Chat history and memory deleted successfully!");
-        setTimeout(() => {
-          router.push("/chat"); // Redirect to the main chat page
-        }, 1500);
-      }
     } catch (err: any) {
       console.error("An unexpected error occurred during chat history deletion:", err.message);
-      setDeleteChatMessage("An unexpected error occurred during deletion.");
+      setDeleteChatMessage(`An unexpected error occurred during deletion: ${err.message}`);
     } finally {
       setDeleteChatLoading(false);
     }
@@ -93,31 +84,42 @@ export default function SettingsPage() {
 
       const user_id = user.id;
 
-      // Step 1: Delete related data (messages, memory, profile)
-      // Note: Supabase RLS should ideally handle this cascade if configured,
-      // but explicit deletion ensures it if RLS isn't set up for cascade.
-      const { error: deleteMessagesError } = await supabase
-        .from('messages')
+      // Step 1: Delete related data (messages, memory, chat_sessions, profile)
+      // Call the API route to delete all chat history and sessions first
+      const deleteChatResponse = await fetch('/api/delete-all-history', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!deleteChatResponse.ok) {
+        const errorData = await deleteChatResponse.json();
+        throw new Error(errorData.error || 'Failed to delete chat history and sessions for account deletion.');
+      }
+      console.log("Chat history and sessions deleted as part of account deletion.");
+
+
+      // Delete memory (if 'memory' table is separate from chat history in your design)
+      const { error: deleteMemoryError } = await supabase
+        .from('memory') // Assuming 'memory' table exists and has user_id
         .delete()
         .eq('user_id', user_id);
 
-      const { error: deleteMemoryError } = await supabase
-        .from('memory')
-        .delete()
-        .eq('user_id', user_id);
+      if (deleteMemoryError) {
+        throw new Error(`Failed to delete memory: ${deleteMemoryError.message}`);
+      }
+      console.log("Memory deleted successfully.");
 
       const { error: deleteProfileError } = await supabase
         .from('profiles')
         .delete()
         .eq('id', user_id);
 
-      if (deleteMessagesError || deleteMemoryError || deleteProfileError) {
-        console.error("Failed to delete associated data:",
-          deleteMessagesError?.message, deleteMemoryError?.message, deleteProfileError?.message);
-        setDeleteAccountMessage(`Failed to delete associated data: ${deleteMessagesError?.message || deleteMemoryError?.message || deleteProfileError?.message}`);
-        setDeleteAccountLoading(false);
-        return;
+      if (deleteProfileError) {
+        throw new Error(`Failed to delete profile: ${deleteProfileError.message}`);
       }
+      console.log("Profile deleted successfully.");
 
       // Step 2: Sign out the user
       const { error: signOutError } = await supabase.auth.signOut();
@@ -128,13 +130,13 @@ export default function SettingsPage() {
         return;
       }
 
-      // Step 3: Delete the user account (this requires admin privileges or specific RLS)
-      // In a client-side app, direct user deletion is typically not allowed for security reasons.
+      // Step 3: Delete the user account (this typically requires a secure backend function)
+      // In a client-side app, direct user deletion is generally not allowed for security reasons.
       // This usually needs a Supabase Function/Edge Function or a secure backend call.
-      // For demonstration, we'll simulate success after data deletion and sign out.
-      // If you have a backend function, you'd call it here.
-      // const { error: authDeleteError } = await supabase.auth.admin.deleteUser(user_id);
-      // if (authDeleteError) { /* handle error */ }
+      // For now, we'll simulate success after data deletion and sign out.
+      // If you have a backend function, you'd call it here, e.g.:
+      // const authDeleteResponse = await fetch('/api/delete-user-account', { method: 'POST' });
+      // if (!authDeleteResponse.ok) { /* handle error */ }
 
       console.log("Account and all associated data deleted successfully.");
       setDeleteAccountMessage("Your account and all data have been permanently deleted. Redirecting...");

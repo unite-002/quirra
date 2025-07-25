@@ -473,20 +473,19 @@ export default function Home() {
     }
 
     // Ensure there's an active chat session. If not, create one.
+    // This logic is fine, will be handled by sendToApiAndSave if it's the very first message.
     if (!activeChatSessionId) {
       const newSessionId = crypto.randomUUID();
       setActiveChatSessionId(newSessionId);
-      // Temporarily add to chatSessions state so it's available for saving
-      // It will be fully persisted with a title on the first message.
       setChatSessions(prev => [{ id: newSessionId, title: "New Chat", created_at: new Date().toISOString() }, ...prev]);
     }
 
     let userMessageToProcess: ChatMessage;
     let currentMessagesForContext: ChatMessage[];
     let originalUserMessageCreatedAt: string | undefined;
+    const assistantPlaceholderId = crypto.randomUUID(); // Declare here, available for both paths
 
     if (editingMessageId) {
-      // Logic for editing an existing message
       setIsRegenerating(true);
       const originalMessageIndex = messages.findIndex(msg => msg.id === editingMessageId && msg.role === 'user');
       if (originalMessageIndex === -1) {
@@ -494,49 +493,44 @@ export default function Home() {
         setEditingMessageId(null);
         return;
       }
-      // Create the updated user message object
       userMessageToProcess = {
         ...messages[originalMessageIndex],
         content: input.trim(),
-        chat_session_id: activeChatSessionId!, // Ensure session ID is propagated
-        // emotion_score might need to be re-calculated by API, but we don't clear it here.
-        // created_at is preserved from original for DB deletion logic, but will be updated for DB upsert later.
+        chat_session_id: activeChatSessionId!,
       };
       originalUserMessageCreatedAt = messages[originalMessageIndex].created_at;
 
-      // Truncate the messages array to include only messages up to the edited user message
-      // This forms the new 'history' context for the API call
-      currentMessagesForContext = messages.slice(0, originalMessageIndex + 1).map(msg =>
-        msg.id === editingMessageId ? userMessageToProcess : msg // Ensure the edited message is in the context
-      );
+      // Filter out messages after the edited one and update the edited message itself
+      const messagesBeforeEdit = messages.slice(0, originalMessageIndex);
+      currentMessagesForContext = [...messagesBeforeEdit, userMessageToProcess];
 
-      // Immediately update the UI to show the edited message and remove subsequent messages
-      setMessages(currentMessagesForContext);
+      // Update UI immediately: show edited message, remove subsequent, and add new assistant placeholder
+      setMessages([...currentMessagesForContext, { role: "assistant", content: "", id: assistantPlaceholderId, chat_session_id: activeChatSessionId! }]);
 
-      setEditingMessageId(null); // Clear editing state
-      setInput(""); // Clear input field
+      setEditingMessageId(null);
+      setInput("");
 
     } else {
       // Logic for sending a brand new message
       userMessageToProcess = {
         role: "user",
         content: input.trim(),
-        id: crypto.randomUUID(), // Assign a new unique ID
-        created_at: new Date().toISOString(), // Assign an initial timestamp
-        chat_session_id: activeChatSessionId!, // --- ASSIGN CHAT SESSION ID ---
+        id: crypto.randomUUID(),
+        created_at: new Date().toISOString(),
+        chat_session_id: activeChatSessionId!,
       };
-      // For a new message, the context is all current messages plus the new one
-      currentMessagesForContext = [...messages, userMessageToProcess];
-      // Add user message to UI immediately
-      setMessages(currentMessagesForContext);
-      setInput(""); // Clear input immediately
+      currentMessagesForContext = [...messages, userMessageToProcess]; // This will be the context for API
+
+      // Add both user message and assistant placeholder to UI in one go
+      setMessages((prev) => [
+        ...prev,
+        userMessageToProcess,
+        { role: "assistant", content: "", id: assistantPlaceholderId, chat_session_id: activeChatSessionId! }
+      ]);
+      setInput("");
     }
 
-    // Add a placeholder for the assistant's response in the UI
-    const assistantPlaceholderId = crypto.randomUUID();
-    setMessages((prev) => [...prev, { role: "assistant", content: "", id: assistantPlaceholderId, chat_session_id: activeChatSessionId! }]);
-
-    // Call the refactored function to handle API communication and DB persistence
+    // Call the refactored function
     await sendToApiAndSave(currentMessagesForContext, userMessageToProcess, assistantPlaceholderId, originalUserMessageCreatedAt);
   };
 
