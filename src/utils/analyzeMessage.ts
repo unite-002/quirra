@@ -12,6 +12,11 @@ export interface MessageAnalysis {
   politeness_score: number; // 0.0 (very impolite) to 1.0 (very polite)
   topic_keywords: string[]; // e.g., ["math", "homework", "project"], 3-5 keywords
   domain_context: string; // e.g., "education", "technical_support", "customer_service", "personal", "business", "creative"
+  detected_language: string; // ISO 639-1 code (e.g., 'en', 'es', 'ar')
+
+  // New fields for specific NLP tasks, like translation or summarization
+  source_text?: string; // The specific part of the message to be translated or summarized
+  target_language?: string; // The desired target language for translation (ISO 639-1 code)
 }
 
 // Default analysis to return in case of errors or missing API key
@@ -25,7 +30,12 @@ export const DEFAULT_ANALYSIS: MessageAnalysis = {
   urgency_score: 0.0,
   politeness_score: 0.5,
   topic_keywords: [],
-  domain_context: "general"
+  domain_context: "general",
+  detected_language: "en", // Default to English
+
+  // Default values for new optional fields
+  source_text: undefined,
+  target_language: undefined
 };
 
 export async function analyzeMessageTone(message: string): Promise<MessageAnalysis> {
@@ -41,7 +51,7 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
       type: "function",
       function: {
         name: "analyze_message",
-        description: "Analyzes a user message for various communication attributes including mood, tone, intent, sentiment, formality, urgency, politeness, keywords, and context.",
+        description: "Analyzes a user message thoroughly for various communication attributes, including mood, tone, intent, sentiment, formality, urgency, politeness, keywords, context, detected language. It also identifies source text for translation/summarization and target language for translation if applicable.",
         parameters: {
           type: "object",
           properties: {
@@ -55,7 +65,7 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
             },
             intent: {
               type: "string",
-              description: "The primary purpose of the message. Examples: question, complaint, feedback, casual_talk, instruction, request, information_seeking, problem_reporting, greeting, clarification."
+              description: "The primary purpose of the message. Examples: question, complaint, feedback, casual_talk, instruction, request, information_seeking, problem_reporting, greeting, clarification, translation, summarization."
             },
             sentiment_score: {
               type: "number",
@@ -92,6 +102,18 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
             domain_context: {
               type: "string",
               description: "The general context or domain the message belongs to. Examples: education, technical_support, customer_service, personal, business, creative, legal, medical, general."
+            },
+            detected_language: {
+              type: "string",
+              description: "The primary language of the message, expressed as an ISO 639-1 two-letter code (e.g., 'en' for English, 'es' for Spanish, 'fr' for French, 'ar' for Arabic, 'zh' for Chinese, 'de' for German, 'ja' for Japanese)."
+            },
+            source_text: { // NEW OPTIONAL FIELD
+                type: "string",
+                description: "If the intent is 'translation' or 'summarization', this is the specific segment of the user's message that needs processing. Otherwise, leave null."
+            },
+            target_language: { // NEW OPTIONAL FIELD
+                type: "string",
+                description: "If the intent is 'translation', this is the ISO 639-1 two-letter code for the desired target language. Otherwise, leave null."
             }
           },
           required: [
@@ -104,7 +126,8 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
             "urgency_score",
             "politeness_score",
             "topic_keywords",
-            "domain_context"
+            "domain_context",
+            "detected_language"
           ]
         }
       }
@@ -115,7 +138,7 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
   const promptMessages = [
     {
       role: "system",
-      content: `You are an expert communication analyst. Your sole purpose is to analyze the user's message thoroughly and provide precise attributes using the 'analyze_message' tool. You MUST respond ONLY by calling this tool.`
+      content: `You are an expert communication analyst. Your sole purpose is to analyze the user's message thoroughly and provide precise attributes using the 'analyze_message' tool. You MUST respond ONLY by calling this tool. Ensure all fields, including the detected language, are accurately filled. If the user's intent is 'translation' or 'summarization', identify the 'source_text' to be processed and for translation, the 'target_language'.`
     },
     {
       role: "user",
@@ -170,13 +193,7 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
 
     // 8. Parse and return the analysis from function arguments
     try {
-      // The arguments are guaranteed by OpenAI's function calling to be valid JSON
-      // conforming to the schema we provided.
       const parsedAnalysis: MessageAnalysis = JSON.parse(toolCall.function.arguments);
-
-      // Although function calling enforces schema, a final sanity check can be added
-      // if there are specific runtime validations beyond basic type (e.g., score ranges).
-      // For simplicity, we trust the schema enforcement here.
       return parsedAnalysis;
 
     } catch (parseError) {

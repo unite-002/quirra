@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
-import { supabase } from "@/utils/supabase"; // Assumes your Supabase client is correctly configured here
+import { supabase } from "@/utils/supabase";
 import { useRouter } from "next/navigation";
 import {
   MenuIcon,
@@ -17,17 +17,16 @@ import {
   Frown,
   Meh,
   Edit,
-  Eraser, // Added for deleting chat session (optional, but good for management)
+  Eraser,
+  MoreVertical, // Added for the "..." menu icon
 } from "lucide-react";
-import { PersonalityOnboarding } from "@/components/PersonalityOnboarding"; // Your onboarding component
+import { PersonalityOnboarding } from "@/components/PersonalityOnboarding";
 
-// For Markdown rendering and Syntax Highlighting
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm'; // For GitHub Flavored Markdown (tables, task lists etc.)
+import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { dark } from 'react-syntax-highlighter/dist/cjs/styles/prism'; // A dark theme for code blocks
+import { dark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 
-// Define the specific props for the custom 'code' component passed to ReactMarkdown
 interface CodeProps {
   inline?: boolean;
   className?: string;
@@ -35,32 +34,29 @@ interface CodeProps {
   node?: any;
 }
 
-// Define the shape of ChatMessage and PersonalityProfile for type safety
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
-  emotion_score?: number; // Detected emotion from API for user messages
-  personality_profile?: PersonalityProfile; // User's profile, saved with user messages (historical)
-  id: string; // Add a unique ID for each message for better keying and copying
-  created_at?: string; // Add created_at for sorting and editing logic
-  chat_session_id: string; // Add chat_session_id to message type
+  emotion_score?: number;
+  personality_profile?: PersonalityProfile;
+  id: string;
+  created_at?: string;
+  chat_session_id: string;
 };
 
 interface PersonalityProfile {
   learning_style: string;
   communication_preference: string;
   feedback_preference: string;
-  preferred_name: string | null; // Added preferred_name to the interface
+  preferred_name: string | null;
 }
 
-// Define a type for the user's general profile data (username, full name)
 interface UserProfileData {
   username: string | null;
   full_name: string | null;
-  personality_profile: PersonalityProfile | null; // Include this here for direct access
+  personality_profile: PersonalityProfile | null;
 }
 
-// Define the type for a chat session
 interface ChatSession {
   id: string;
   title: string;
@@ -71,28 +67,43 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false); // For ongoing chat processing
-  const [isInitialLoading, setIsInitialLoading] = useState(true); // For initial page load
+  const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [displayUserName, setDisplayUserName] = useState<string | null>(null);
   const [chatbotUserName, setChatbotUserName] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null); // State for editing feature
-  const [isRegenerating, setIsRegenerating] = useState(false); // State to indicate regeneration after edit
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   // --- NEW STATE FOR CHAT SESSIONS ---
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [showSessionOptionsForId, setShowSessionOptionsForId] = useState<string | null>(null); // State for showing the "..." menu
   // ---------------------------------
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
+  const sessionOptionsRef = useRef<HTMLDivElement>(null); // Ref for closing the options menu
+
+  // Close the session options menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (sessionOptionsRef.current && !sessionOptionsRef.current.contains(event.target as Node)) {
+        setShowSessionOptionsForId(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   // --- Authentication and History Loading Function (Wrapped in useCallback) ---
   const checkAuthAndLoadHistory = useCallback(async () => {
-    setIsInitialLoading(true); // Start initial load indicator
+    setIsInitialLoading(true);
 
     const {
       data: { session },
@@ -109,7 +120,6 @@ export default function Home() {
     const userId = session.user.id;
     setUserEmail(session.user.email ?? null);
 
-    // 1. Fetch User Profile Data (including full_name, username, and personality_profile)
     let profileData: UserProfileData | null = null;
     const { data: fetchedProfileData, error: profileError } = await supabase
       .from("profiles")
@@ -117,28 +127,25 @@ export default function Home() {
       .eq('id', userId)
       .single();
 
-    if (profileError && profileError.code !== 'PGRST116') { // PGRST116 means no rows found (new user)
+    if (profileError && profileError.code !== 'PGRST116') {
       console.error("❌ Failed to load user profile:", profileError.message);
     } else if (fetchedProfileData) {
       profileData = fetchedProfileData as UserProfileData;
     }
 
-    // Determine the name to display and the name for the chatbot
     let resolvedDisplayUserName: string;
     let resolvedChatbotUserName: string;
 
-    // Prioritize preferred_name from personality_profile
     if (profileData?.personality_profile?.preferred_name) {
       resolvedDisplayUserName = profileData.personality_profile.preferred_name;
       resolvedChatbotUserName = profileData.personality_profile.preferred_name;
     } else if (profileData?.full_name) {
       resolvedDisplayUserName = profileData.full_name;
-      resolvedChatbotUserName = profileData.full_name.split(' ')[0]; // Use first name from full_name
+      resolvedChatbotUserName = profileData.full_name.split(' ')[0];
     } else if (profileData?.username) {
       resolvedDisplayUserName = profileData.username;
-      resolvedChatbotUserName = profileData.username; // Use username as the chatbot name
+      resolvedChatbotUserName = profileData.username;
     } else {
-      // Fallback to email part if no full_name or username
       const namePart = session.user.email?.split('@')[0] || "User";
       resolvedDisplayUserName = namePart.replace(/[._]/g, ' ').split(' ')
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
@@ -149,17 +156,14 @@ export default function Home() {
     setDisplayUserName(resolvedDisplayUserName);
     setChatbotUserName(resolvedChatbotUserName);
 
-    // Set personality profile from DB or localStorage (DB takes precedence)
     const storedPersonalityProfile = localStorage.getItem('quirra_personality_profile');
     const parsedStoredPersonalityProfile: PersonalityProfile | null = storedPersonalityProfile ? JSON.parse(storedPersonalityProfile) : null;
 
     let finalPersonalityProfile = profileData?.personality_profile || parsedStoredPersonalityProfile;
 
-    // Ensure the personality profile from DB is always authoritative if present
     if (profileData?.personality_profile) {
       localStorage.setItem('quirra_personality_profile', JSON.stringify(profileData.personality_profile));
     } else if (!finalPersonalityProfile) {
-      // If no profile from DB and no profile in localStorage, remove any stale item
       localStorage.removeItem('quirra_personality_profile');
     }
     setUserPersonalityProfile(finalPersonalityProfile);
@@ -169,7 +173,7 @@ export default function Home() {
       .from("chat_sessions")
       .select("id, title, created_at")
       .eq('user_id', userId)
-      .order("created_at", { ascending: false }); // Most recent sessions first
+      .order("created_at", { ascending: false });
 
     if (sessionsError) {
       console.error("❌ Failed to load chat sessions:", sessionsError.message);
@@ -177,15 +181,13 @@ export default function Home() {
       const sortedSessions = sessionsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setChatSessions(sortedSessions);
 
-      // If there are existing sessions, set the most recent one as active
       if (sortedSessions.length > 0) {
         setActiveChatSessionId(sortedSessions[0].id);
-        // Load messages for the most recent session
         const { data: messagesData, error: fetchMessagesError } = await supabase
           .from("messages")
           .select("id, role, content, emotion_score, personality_profile, created_at, chat_session_id")
           .eq('user_id', userId)
-          .eq('chat_session_id', sortedSessions[0].id) // Filter by active chat session ID
+          .eq('chat_session_id', sortedSessions[0].id)
           .order("created_at", { ascending: true });
 
         if (fetchMessagesError) {
@@ -194,49 +196,41 @@ export default function Home() {
           setMessages(messagesData as ChatMessage[]);
         }
       } else {
-        // If no sessions, create a new one automatically for the first chat
         const newSessionId = crypto.randomUUID();
         setActiveChatSessionId(newSessionId);
-        // We'll save this new session to the DB when the first message is sent.
-        // For now, just set the active ID and ensure messages state is empty.
         setMessages([]);
       }
     }
-    setIsInitialLoading(false); // End initial load indicator
-  }, [router]); // Dependencies for useCallback
+    setIsInitialLoading(false);
+  }, [router]);
 
-  // --- Authentication and History Loading Effect (calls the function) ---
   useEffect(() => {
     checkAuthAndLoadHistory();
-  }, [checkAuthAndLoadHistory]); // `checkAuthAndLoadHistory` is now a dependency
+  }, [checkAuthAndLoadHistory]);
 
-  // --- Effect to scroll to the bottom of the chat on new messages ---
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // --- Effect to auto-resize textarea and manage scroll ---
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'; // Reset height to recalculate
-      // Set height based on scrollHeight, but cap at max height (e.g., 5 rows * line-height)
+      textareaRef.current.style.height = 'auto';
       const lineHeight = parseFloat(getComputedStyle(textareaRef.current).lineHeight);
-      const maxHeight = lineHeight * 5; // Adjust 5 to desired max lines before scroll
+      const maxHeight = lineHeight * 5;
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, maxHeight)}px`;
       if (textareaRef.current.scrollHeight > maxHeight) {
-        textareaRef.current.style.overflowY = 'auto'; // Enable scroll if content exceeds max height
+        textareaRef.current.style.overflowY = 'auto';
       } else {
-        textareaRef.current.style.overflowY = 'hidden'; // Hide scroll otherwise
+        textareaRef.current.style.overflowY = 'hidden';
       }
     }
-  }, [input]); // Recalculate height whenever input changes
+  }, [input]);
 
-  // --- Function to send message to API and save to DB ---
   const sendToApiAndSave = async (
-    currentMessagesForContext: ChatMessage[], // The messages including the new/edited user message, up to that point
-    userMessageToProcess: ChatMessage, // The specific user message being sent/edited
+    currentMessagesForContext: ChatMessage[],
+    userMessageToProcess: ChatMessage,
     assistantPlaceholderId: string,
-    originalUserMessageCreatedAt?: string // Pass original timestamp for deletion logic if editing
+    originalUserMessageCreatedAt?: string
   ) => {
     if (!activeChatSessionId) {
       console.error("No active chat session ID. Cannot send message or save.");
@@ -262,7 +256,7 @@ export default function Home() {
             role: msg.role,
             content: msg.content,
           })),
-          chatSessionId: activeChatSessionId, // --- SEND CHAT SESSION ID ---
+          chatSessionId: activeChatSessionId,
         }),
       });
 
@@ -319,12 +313,11 @@ export default function Home() {
         }
       }
 
-      // After streaming is complete, update the user message with emotion score and a new created_at for persistence
       const finalUserMessage = {
         ...userMessageToProcess,
         emotion_score: detectedEmotionScore,
-        created_at: new Date().toISOString(), // Assign a fresh timestamp for persistence
-        chat_session_id: activeChatSessionId, // Ensure session ID is added
+        created_at: new Date().toISOString(),
+        chat_session_id: activeChatSessionId,
       };
 
       setMessages((prev) => {
@@ -336,13 +329,10 @@ export default function Home() {
         return updatedMessages;
       });
 
-      // --- PERSIST MESSAGES TO SUPABASE ---
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
 
       if (userId) {
-        // --- NEW: Create chat session if it's the first message in a new session ---
-        // This logic ensures the session is saved when the first user message comes in.
         const sessionExists = chatSessions.some(s => s.id === activeChatSessionId);
         if (!sessionExists) {
           const { error: sessionInsertError } = await supabase
@@ -350,27 +340,24 @@ export default function Home() {
             .insert({
               id: activeChatSessionId,
               user_id: userId,
-              title: "New Chat", // Initial title, will be updated later
+              title: "New Chat",
               created_at: new Date().toISOString(),
             });
           if (sessionInsertError) {
             console.error("❌ Failed to create chat session:", sessionInsertError.message);
           } else {
             console.log("New chat session created:", activeChatSessionId);
-            // Add the new session to state
             setChatSessions(prev => [{ id: activeChatSessionId, title: "New Chat", created_at: new Date().toISOString() }, ...prev]);
           }
         }
 
-        // 1. If editing, delete all messages after the original user message from DB
-        // This is crucial to maintain conversation integrity after an edit.
         if (originalUserMessageCreatedAt) {
           const { error: deleteError } = await supabase
             .from("messages")
             .delete()
             .eq('user_id', userId)
-            .eq('chat_session_id', activeChatSessionId) // Delete only from the active session
-            .gte('created_at', originalUserMessageCreatedAt); // Delete messages from this timestamp onwards
+            .eq('chat_session_id', activeChatSessionId)
+            .gte('created_at', originalUserMessageCreatedAt);
 
           if (deleteError) {
             console.error("❌ Failed to clear subsequent messages in DB:", deleteError.message);
@@ -379,44 +366,39 @@ export default function Home() {
           }
         }
 
-        // 2. Save/Update the user's message (with emotion score, personality profile, and a fresh timestamp)
-        // Use upsert to either insert new or update existing based on ID
         const { error: userMessageError } = await supabase
           .from("messages")
           .upsert({
-            id: userMessageToProcess.id, // Use the existing ID for upsert
+            id: userMessageToProcess.id,
             user_id: userId,
             role: "user",
             content: finalUserMessage.content,
             emotion_score: finalUserMessage.emotion_score,
             personality_profile: userPersonalityProfile,
-            created_at: finalUserMessage.created_at, // Use the new timestamp
-            chat_session_id: activeChatSessionId, // --- SAVE CHAT SESSION ID ---
-          }, { onConflict: 'id' }); // Conflict on 'id' to update existing row
+            created_at: finalUserMessage.created_at,
+            chat_session_id: activeChatSessionId,
+          }, { onConflict: 'id' });
 
         if (userMessageError) {
           console.error("❌ Failed to save/update user message:", userMessageError.message);
         }
 
-        // 3. Save the new assistant's response
         const { error: assistantMessageError } = await supabase
           .from("messages")
           .insert({
             user_id: userId,
             role: "assistant",
             content: accumulatedAssistantResponse,
-            created_at: new Date().toISOString(), // New timestamp for assistant message
-            chat_session_id: activeChatSessionId, // --- SAVE CHAT SESSION ID ---
+            created_at: new Date().toISOString(),
+            chat_session_id: activeChatSessionId,
           });
 
         if (assistantMessageError) {
           console.error("❌ Failed to save assistant message:", assistantMessageError.message);
         }
 
-        // --- NEW: Automatically title the chat session after the first message pair ---
-        // This will only run for the first message of a new session
-        if (messages.length === 0 && !originalUserMessageCreatedAt) { // If it was a new chat and not an edit
-          const generatedTitle = accumulatedAssistantResponse.substring(0, 50).split('\n')[0].trim(); // Take first 50 chars of assistant's response
+        if (messages.length === 0 && !originalUserMessageCreatedAt) {
+          const generatedTitle = accumulatedAssistantResponse.substring(0, 50).split('\n')[0].trim();
           const newTitle = generatedTitle.length > 0 ? generatedTitle : "New Chat";
 
           const { error: titleUpdateError } = await supabase
@@ -446,34 +428,30 @@ export default function Home() {
         if (assistantMsgIndex !== -1) {
           updatedMessages[assistantMsgIndex] = {
             ...updatedMessages[assistantMsgIndex],
-            content: `⚠️ Failed to get a response from Quirra. Please check your internet connection or try again. (${err.message.substring(0, 100)}...)`, // Truncate error message
+            content: `⚠️ Failed to get a response from Quirra. Please check your internet connection or try again. (${err.message.substring(0, 100)}...)`,
           };
         } else {
-          // Fallback if placeholder wasn't found for some reason
           updatedMessages.push({
             role: "assistant",
             content: `⚠️ An unexpected error occurred. Please try again.`,
             id: crypto.randomUUID(),
-            chat_session_id: activeChatSessionId || crypto.randomUUID(), // Fallback for session ID
+            chat_session_id: activeChatSessionId || crypto.randomUUID(),
           });
         }
         return updatedMessages;
       });
     } finally {
       setIsLoading(false);
-      setIsRegenerating(false); // Clear regenerating state
+      setIsRegenerating(false);
     }
   };
 
-  // --- Handler for submitting a new chat message or an edited message ---
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!input.trim() || isLoading) {
       return;
     }
 
-    // Ensure there's an active chat session. If not, create one.
-    // This logic is fine, will be handled by sendToApiAndSave if it's the very first message.
     if (!activeChatSessionId) {
       const newSessionId = crypto.randomUUID();
       setActiveChatSessionId(newSessionId);
@@ -483,7 +461,7 @@ export default function Home() {
     let userMessageToProcess: ChatMessage;
     let currentMessagesForContext: ChatMessage[];
     let originalUserMessageCreatedAt: string | undefined;
-    const assistantPlaceholderId = crypto.randomUUID(); // Declare here, available for both paths
+    const assistantPlaceholderId = crypto.randomUUID();
 
     if (editingMessageId) {
       setIsRegenerating(true);
@@ -500,18 +478,15 @@ export default function Home() {
       };
       originalUserMessageCreatedAt = messages[originalMessageIndex].created_at;
 
-      // Filter out messages after the edited one and update the edited message itself
       const messagesBeforeEdit = messages.slice(0, originalMessageIndex);
       currentMessagesForContext = [...messagesBeforeEdit, userMessageToProcess];
 
-      // Update UI immediately: show edited message, remove subsequent, and add new assistant placeholder
       setMessages([...currentMessagesForContext, { role: "assistant", content: "", id: assistantPlaceholderId, chat_session_id: activeChatSessionId! }]);
 
       setEditingMessageId(null);
       setInput("");
 
     } else {
-      // Logic for sending a brand new message
       userMessageToProcess = {
         role: "user",
         content: input.trim(),
@@ -519,9 +494,8 @@ export default function Home() {
         created_at: new Date().toISOString(),
         chat_session_id: activeChatSessionId!,
       };
-      currentMessagesForContext = [...messages, userMessageToProcess]; // This will be the context for API
+      currentMessagesForContext = [...messages, userMessageToProcess];
 
-      // Add both user message and assistant placeholder to UI in one go
       setMessages((prev) => [
         ...prev,
         userMessageToProcess,
@@ -530,11 +504,9 @@ export default function Home() {
       setInput("");
     }
 
-    // Call the refactored function
     await sendToApiAndSave(currentMessagesForContext, userMessageToProcess, assistantPlaceholderId, originalUserMessageCreatedAt);
   };
 
-  // --- Handler for editing a specific message ---
   const handleEditMessage = (messageId: string) => {
     if (isLoading) {
       alert("Please wait for the current response to complete before editing.");
@@ -544,54 +516,43 @@ export default function Home() {
     if (messageToEdit) {
       setEditingMessageId(messageId);
       setInput(messageToEdit.content);
-      textareaRef.current?.focus(); // Focus the textarea
-      textareaRef.current?.setSelectionRange(messageToEdit.content.length, messageToEdit.content.length); // Move cursor to end
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(messageToEdit.content.length, messageToEdit.content.length);
     }
   };
 
-  // --- Handler for resetting the current conversation (and making it a 'new chat') ---
   const handleReset = async () => {
     if (isLoading) {
       alert("Please wait for the current response to complete before resetting.");
       return;
     }
-    setMessages([]); // Clear client-side messages immediately
-    setIsSidebarOpen(false); // Close sidebar on reset
-    setEditingMessageId(null); // Clear editing state on reset
+    setMessages([]);
+    setIsSidebarOpen(false);
+    setEditingMessageId(null);
 
-    // Generate a new session ID for the 'new chat'
     const newSessionId = crypto.randomUUID();
     setActiveChatSessionId(newSessionId);
-
-    // No need to explicitly delete old messages from DB here for a "reset" that means "start a new chat".
-    // The old messages will remain associated with their previous chat_session_id.
-    // The API will handle the context based on the provided activeChatSessionId.
     console.log(`Starting new conversation with session ID: ${newSessionId}`);
-    // The new session will be created in the DB when the first message is sent to it.
-
-    // If we want to *force* the API to forget previous context (even if not explicitly sending reset:true),
-    // we rely on the `chatSessionId` being sent.
   };
 
-  // --- Handler for starting a new chat (client-side and server-side reset) ---
   const handleNewChat = () => {
-    handleReset(); // A new chat implicitly means resetting the current one (starting a fresh session ID)
+    handleReset();
   };
 
-  // --- NEW: Handler for switching to an existing chat session ---
   const handleSwitchChatSession = useCallback(async (sessionId: string) => {
     if (isLoading) {
       alert("Please wait for the current response to complete before switching chats.");
       return;
     }
     if (sessionId === activeChatSessionId) {
-      setIsSidebarOpen(false); // Just close sidebar if already on this chat
+      setIsSidebarOpen(false);
       return;
     }
 
-    setIsLoading(true); // Indicate loading for chat switch
-    setMessages([]); // Clear current messages while loading new ones
-    setActiveChatSessionId(sessionId); // Set the new active session
+    setIsLoading(true);
+    setMessages([]);
+    setActiveChatSessionId(sessionId);
+    setEditingMessageId(null); // Clear editing state when switching chats
 
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id;
@@ -601,7 +562,7 @@ export default function Home() {
         .from("messages")
         .select("id, role, content, emotion_score, personality_profile, created_at, chat_session_id")
         .eq('user_id', userId)
-        .eq('chat_session_id', sessionId) // Fetch messages for the selected session ID
+        .eq('chat_session_id', sessionId)
         .order("created_at", { ascending: true });
 
       if (fetchError) {
@@ -615,10 +576,61 @@ export default function Home() {
       setMessages([{ role: "assistant", content: "Not logged in. Cannot load chat history.", id: crypto.randomUUID(), chat_session_id: sessionId }]);
     }
     setIsLoading(false);
-    setIsSidebarOpen(false); // Close sidebar after switching
-  }, [isLoading, activeChatSessionId]); // Add activeChatSessionId to dependencies to avoid stale closure
+    setIsSidebarOpen(false);
+    setShowSessionOptionsForId(null); // Close any open menu
+  }, [isLoading, activeChatSessionId]);
 
-  // --- NEW: Handler for deleting a chat session ---
+  // --- NEW: Function to Rename a Chat Session ---
+  const renameChatSession = useCallback(async (sessionId: string, newTitle: string) => {
+    if (!newTitle.trim()) {
+      alert("Session title cannot be empty.");
+      return false;
+    }
+    if (isLoading) {
+      alert("Please wait for the current response to complete before renaming chats.");
+      return false;
+    }
+
+    setIsLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+
+      if (!userId) {
+        console.warn("User ID not available, cannot rename chat session.");
+        alert("Error: User not logged in. Cannot rename chat session.");
+        return false;
+      }
+
+      const { error } = await supabase
+        .from("chat_sessions")
+        .update({ title: newTitle.trim() })
+        .eq("id", sessionId)
+        .eq('user_id', userId); // Ensure user owns the session
+
+      if (error) {
+        throw new Error(`Failed to rename session: ${error.message}`);
+      }
+      console.log(`Session ${sessionId} renamed to "${newTitle.trim()}" successfully.`);
+
+      // Update local state
+      setChatSessions(prevSessions =>
+        prevSessions.map(sessionItem =>
+          sessionItem.id === sessionId ? { ...sessionItem, title: newTitle.trim() } : sessionItem
+        )
+      );
+      return true;
+    } catch (err: any) {
+      console.error("❌ Error renaming chat session:", err.message);
+      alert(`Failed to rename chat session: ${err.message}`);
+      return false;
+    } finally {
+      setIsLoading(false);
+      setShowSessionOptionsForId(null); // Close the options menu
+    }
+  }, [isLoading]);
+
+  // --- MODIFIED: Handler for deleting a chat session (now relies on DB trigger) ---
   const handleDeleteChatSession = useCallback(async (sessionIdToDelete: string) => {
     if (isLoading) {
       alert("Please wait for the current response to complete before deleting chats.");
@@ -634,49 +646,41 @@ export default function Home() {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
 
-      if (userId) {
-        // First, delete all messages associated with this chat_session_id
-        const { error: messagesDeleteError } = await supabase
-          .from("messages")
-          .delete()
-          .eq('user_id', userId)
-          .eq('chat_session_id', sessionIdToDelete);
-
-        if (messagesDeleteError) {
-          throw new Error(`Failed to delete messages: ${messagesDeleteError.message}`);
-        }
-
-        // Then, delete the chat session itself
-        const { error: sessionDeleteError } = await supabase
-          .from("chat_sessions")
-          .delete()
-          .eq('user_id', userId)
-          .eq('id', sessionIdToDelete);
-
-        if (sessionDeleteError) {
-          throw new Error(`Failed to delete chat session: ${sessionDeleteError.message}`);
-        }
-
-        // Update UI state
-        setChatSessions(prev => prev.filter(session => session.id !== sessionIdToDelete));
-        if (activeChatSessionId === sessionIdToDelete) {
-          // If the deleted session was the active one, start a new chat
-          handleNewChat();
-        }
-        console.log(`Chat session ${sessionIdToDelete} and its messages deleted.`);
-      } else {
+      if (!userId) {
         console.warn("User ID not available, cannot delete chat session.");
         alert("Error: User not logged in. Cannot delete chat session.");
+        return;
+      }
+
+      // Thanks to the Supabase trigger, deleting the session record
+      // will automatically delete all associated messages.
+      const { error: sessionDeleteError } = await supabase
+        .from("chat_sessions")
+        .delete()
+        .eq('user_id', userId)
+        .eq('id', sessionIdToDelete);
+
+      if (sessionDeleteError) {
+        throw new Error(`Failed to delete chat session: ${sessionDeleteError.message}`);
+      }
+
+      console.log(`Chat session ${sessionIdToDelete} and its messages deleted.`);
+
+      // Update UI state
+      setChatSessions(prev => prev.filter(session => session.id !== sessionIdToDelete));
+      if (activeChatSessionId === sessionIdToDelete) {
+        // If the deleted session was the active one, start a new chat
+        handleNewChat();
       }
     } catch (err: any) {
       console.error("❌ Error deleting chat session:", err.message);
       alert(`Failed to delete chat session: ${err.message}`);
     } finally {
       setIsLoading(false);
+      setShowSessionOptionsForId(null); // Close the options menu
     }
-  }, [isLoading, activeChatSessionId, handleNewChat]); // Add handleNewChat as a dependency
+  }, [isLoading, activeChatSessionId, handleNewChat]);
 
-  // --- Handler for user logout ---
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) {
@@ -684,23 +688,20 @@ export default function Home() {
       alert(`Error signing out: ${error.message}`);
       return;
     }
-    router.push("/sign-out"); // Redirect to a sign-out confirmation or login page
+    router.push("/sign-out");
   };
 
-  // --- Utility function to copy text to clipboard ---
   const copyToClipboard = async (text: string, messageId: string) => {
     try {
-      await navigator.clipboard.writeText(text); // Modern approach
+      await navigator.clipboard.writeText(text);
       setCopiedMessageId(messageId);
-      setTimeout(() => setCopiedMessageId(null), 2000); // Reset icon after 2 seconds
+      setTimeout(() => setCopiedMessageId(null), 2000);
     } catch (err) {
       console.error("📋 Copy failed", err);
-      // Fallback for older browsers or restricted environments
-      // This is generally not needed for modern browsers in secure contexts.
       const textarea = document.createElement('textarea');
       textarea.value = text;
-      textarea.style.position = 'fixed'; // Avoid scrolling to bottom
-      textarea.style.left = '-9999px'; // Move off-screen
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
       document.body.appendChild(textarea);
       textarea.select();
       document.execCommand('copy');
@@ -711,10 +712,8 @@ export default function Home() {
     }
   };
 
-  // --- Handle Personality Onboarding Completion ---
   const handleOnboardingComplete = useCallback(async (profile: PersonalityProfile) => {
     setUserPersonalityProfile(profile);
-    // Update the user's profile in the database with the new personality data
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id;
 
@@ -733,17 +732,13 @@ export default function Home() {
     } else {
       console.warn("User ID not available, personality profile not saved to DB.");
     }
-
-    // After onboarding, re-fetch full profile to get potentially updated user info (like `preferred_name` if added)
     checkAuthAndLoadHistory();
   }, [checkAuthAndLoadHistory]);
 
-  // Custom component for markdown links to open in new tabs
   const LinkRenderer = ({ node, ...props }: { node?: any; [key: string]: any }) => {
     return <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />;
   };
 
-  // --- Conditional Rendering: Full-page loading spinner ---
   if (isInitialLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
@@ -753,7 +748,6 @@ export default function Home() {
     );
   }
 
-  // --- Conditional Rendering: Personality Onboarding ---
   if (!userPersonalityProfile) {
     return (
       <div className="min-h-screen bg-[#0A0B1A] flex items-center justify-center p-4">
@@ -762,13 +756,12 @@ export default function Home() {
     );
   }
 
-  // --- Main Chat UI (rendered after initial loading and onboarding are complete) ---
   return (
     <main className="min-h-screen bg-[#0A0B1A] text-white flex flex-col">
       {/* Sidebar */}
       <div
         className={`fixed inset-y-0 left-0 w-64 bg-[#0A0B1A] border-r border-[#1a213a] z-50 transform ${
-          isSidebarOpen ? "translate-x-0 w-full md:w-64" : "-translate-x-full" // w-full on small screens when open
+          isSidebarOpen ? "translate-x-0 w-full md:w-64" : "-translate-x-full"
         } transition-transform duration-300 ease-in-out flex flex-col`}
       >
         <div className="p-4 flex items-center justify-start border-b border-[#1a213a]">
@@ -795,7 +788,10 @@ export default function Home() {
               {chatSessions.map((session) => (
                 <div key={session.id} className="relative group">
                   <button
-                    onClick={() => handleSwitchChatSession(session.id)}
+                    onClick={() => {
+                      handleSwitchChatSession(session.id);
+                      setShowSessionOptionsForId(null); // Close options if open
+                    }}
                     className={`flex items-center gap-3 px-4 py-2 pr-10 rounded-lg text-left transition-colors text-base w-full overflow-hidden text-ellipsis whitespace-nowrap ${
                       activeChatSessionId === session.id
                         ? "bg-blue-700 text-white font-semibold"
@@ -804,17 +800,47 @@ export default function Home() {
                   >
                     <MessageSquarePlus size={20} /> {session.title}
                   </button>
-                  {/* Delete button for chat session */}
+                  {/* "..." More Options Button */}
                   <button
                     onClick={(e) => {
-                      e.stopPropagation(); // Prevent activating switch chat session
-                      handleDeleteChatSession(session.id);
+                      e.stopPropagation(); // Prevent `handleSwitchChatSession` from firing
+                      setShowSessionOptionsForId(showSessionOptionsForId === session.id ? null : session.id);
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-gray-400 hover:text-red-400 hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Delete chat session"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-gray-400 hover:text-white hover:bg-[#2a304e] transition-colors"
+                    title="More options"
                   >
-                    <Eraser size={16} />
+                    <MoreVertical size={16} />
                   </button>
+
+                  {/* Options Dropdown Menu */}
+                  {showSessionOptionsForId === session.id && (
+                    <div
+                      ref={sessionOptionsRef} // Attach ref here
+                      className="absolute right-8 top-1/2 -translate-y-1/2 bg-[#2a304e] border border-[#3a405e] rounded-md shadow-lg z-10 flex flex-col overflow-hidden"
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const newTitle = prompt("Enter new name for the session:", session.title);
+                          if (newTitle !== null) { // prompt returns null if cancelled
+                            renameChatSession(session.id, newTitle);
+                          }
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-blue-600 hover:text-white transition-colors w-full text-left"
+                      >
+                        <Edit size={14} /> Rename
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteChatSession(session.id);
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-700 hover:text-white transition-colors w-full text-left"
+                      >
+                        <Eraser size={14} /> Delete
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -823,7 +849,6 @@ export default function Home() {
           )}
         </nav>
         <div className="p-4 border-t border-[#1a213a] flex flex-col gap-2">
-          {/* User Profile Section */}
           {displayUserName && (
             <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-[#1a213a] border border-[#2a304e]">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
@@ -856,7 +881,7 @@ export default function Home() {
           <button
             onClick={() => {
               router.push("/settings");
-              setIsSidebarOpen(false); // Close sidebar when navigating
+              setIsSidebarOpen(false);
             }}
             className="flex items-center gap-3 px-4 py-2 rounded-lg text-left text-gray-300 hover:bg-[#1a213a] hover:text-white transition-colors text-lg"
           >
@@ -874,7 +899,7 @@ export default function Home() {
       {/* Main Content Area */}
       <div
         className={`flex-1 flex flex-col transition-all duration-300 ease-in-out ${
-          isSidebarOpen ? "md:ml-64" : "ml-0" // Apply margin only on medium screens and up
+          isSidebarOpen ? "md:ml-64" : "ml-0"
         }`}
       >
         <header className="p-4 flex items-center gap-4 border-b border-[#1a213a] bg-[#0A0B1A] shadow-lg">
@@ -905,17 +930,16 @@ export default function Home() {
             </div>
           )}
 
-          <div className="flex flex-col gap-8"> {/* Increased gap for better spacing between messages */}
+          <div className="flex flex-col gap-8">
             {messages.map((msg) => (
               <div
-                key={msg.id} // Use msg.id for key
+                key={msg.id}
                 className={`group relative rounded-xl px-4 py-3 max-w-[90%] text-base break-words animate-fadeIn ${
                   msg.role === "user"
-                    ? "bg-[#2A304E] text-white self-end rounded-br-none border border-[#3a405e]" // Changed user message background
+                    ? "bg-[#2A304E] text-white self-end rounded-br-none border border-[#3a405e]"
                     : "bg-[#1a213a] text-white self-start rounded-bl-none shadow-md border border-[#2a304e]"
                 }`}
               >
-                {/* User message emotion cue */}
                 {msg.role === "user" && typeof msg.emotion_score === 'number' && (
                   <div className="absolute -bottom-2 -left-2 text-sm opacity-90 flex items-center justify-center w-6 h-6 rounded-full bg-gray-700/70 backdrop-blur-sm shadow-md border border-gray-600">
                     {msg.emotion_score > 0.1 ? (
@@ -928,9 +952,8 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Assistant thinking indicator */}
                 {msg.role === "assistant" && msg.content === "" && (isLoading || isRegenerating) ? (
-                  <div className="flex items-center gap-2 py-1"> {/* Added padding for alignment */}
+                  <div className="flex items-center gap-2 py-1">
                     <Loader2 className="animate-spin text-blue-400" size={20} />
                     <span className="animate-typing-dots text-lg text-gray-300">Quirra is thinking...</span>
                   </div>
@@ -938,7 +961,6 @@ export default function Home() {
                   <Fragment>
                     <ReactMarkdown
                       components={{
-                        // Custom code block renderer for Gemini-like appearance
                         code({ node, inline, className, children, ...props }: CodeProps) {
                           const match = /language-(\w+)/.exec(className || '');
                           const codeText = String(children).replace(/\n$/, '');
@@ -958,19 +980,19 @@ export default function Home() {
                                   {isCopied ? 'Copied!' : 'Copy code'}
                                 </button>
                               </div>
-                              <div className="p-4 overflow-x-auto custom-scrollbar max-h-96"> {/* Added max-h-96 for vertical scroll */}
+                              <div className="p-4 overflow-x-auto custom-scrollbar max-h-96">
                                 <SyntaxHighlighter
-                                  style={dark} // Using the dark theme
+                                  style={dark}
                                   language={match[1]}
                                   PreTag="pre"
                                   customStyle={{
                                     background: 'transparent',
                                     padding: '0',
                                     margin: '0',
-                                    whiteSpace: 'pre-wrap', // Wrap long lines within the pre tag
+                                    whiteSpace: 'pre-wrap',
                                     wordBreak: 'break-word',
                                   }}
-                                  wrapLines={true} // Ensure lines wrap in code blocks
+                                  wrapLines={true}
                                   {...props}
                                 >
                                   {codeText}
@@ -983,7 +1005,7 @@ export default function Home() {
                             </code>
                           );
                         },
-                        a: LinkRenderer, // Use the custom LinkRenderer
+                        a: LinkRenderer,
                         p: ({ node, ...props }) => <p {...props} className="mb-2 last:mb-0 text-gray-100 leading-relaxed" />,
                         ul: ({ node, ...props }) => <ul {...props} className="list-disc list-inside mb-2 last:mb-0 ml-4" />,
                         ol: ({ node, ...props }) => <ol {...props} className="list-decimal list-inside mb-2 last:mb-0 ml-4" />,
@@ -995,7 +1017,6 @@ export default function Home() {
                         table: ({ node, ...props }) => <table {...props} className="table-auto w-full my-2 text-left border-collapse border border-gray-700" />,
                         th: ({ node, ...props }) => <th {...props} className="px-4 py-2 border border-gray-700 bg-gray-700 font-semibold" />,
                         td: ({ node, ...props }) => <td {...props} className="px-4 py-2 border border-gray-700" />,
-                        // Adding stronger support for strong/bold and em/italic for general text enhancement
                         strong: ({ node, ...props }) => <strong {...props} className="font-semibold text-white" />,
                         em: ({ node, ...props }) => <em {...props} className="italic text-gray-200" />,
                       }}
@@ -1003,10 +1024,9 @@ export default function Home() {
                     >
                       {msg.content}
                     </ReactMarkdown>
-                    {/* Copy and Edit buttons for all messages */}
-                    {msg.content !== "" && ( // Only show buttons if content is not empty (i.e., not the thinking state)
+                    {msg.content !== "" && (
                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity duration-200">
-                        {msg.role === 'user' && ( // Only show edit for user messages
+                        {msg.role === 'user' && (
                           <button
                             className="p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
                             onClick={() => handleEditMessage(msg.id)}
@@ -1033,7 +1053,7 @@ export default function Home() {
                 )}
               </div>
             ))}
-            <div ref={messagesEndRef} /> {/* For auto-scrolling */}
+            <div ref={messagesEndRef} />
           </div>
         </div>
 
@@ -1042,7 +1062,7 @@ export default function Home() {
           onSubmit={handleSubmit}
           className="sticky bottom-0 bg-[#0A0B1A] p-4 border-t border-[#1a213a] flex items-center gap-4 w-full max-w-4xl mx-auto shadow-top"
         >
-          <div className="relative flex-1"> {/* This div will contain textarea and absolutely positioned button */}
+          <div className="relative flex-1">
             <textarea
               ref={textareaRef}
               value={input}
@@ -1055,11 +1075,10 @@ export default function Home() {
               }}
               rows={1}
               placeholder={isLoading ? "Quirra is typing..." : editingMessageId ? "Editing message..." : "Ask Quirra anything..."}
-              className="w-full resize-none bg-[#1a213a] rounded-xl py-3 pl-4 pr-12 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar text-base max-h-[120px]" // max-h-[120px] for ~5 lines before scroll
+              className="w-full resize-none bg-[#1a213a] rounded-xl py-3 pl-4 pr-12 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-[#2a304e] custom-scrollbar text-base max-h-[120px]"
               disabled={isLoading}
             />
-            {/* Send button inside the textarea container */}
-            {(input.trim() || isLoading) && ( // Only show if input has content or is loading
+            {(input.trim() || isLoading) && (
               <button
                 type="submit"
                 className="absolute bottom-2 right-2 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"

@@ -5,6 +5,7 @@ import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 // Import the updated MessageAnalysis interface and analyzeMessageTone function
 import { analyzeMessageTone, MessageAnalysis, DEFAULT_ANALYSIS } from '@/utils/analyzeMessage';
+import { InferenceClient } from '@huggingface/inference'; // Import Hugging Face Inference Client
 
 // Define the shape of a message for clarity
 interface ChatMessage {
@@ -57,22 +58,6 @@ async function saveMessage(
   return true;
 }
 
-// Placeholder for saving high-level memories or summaries.
-// This function should NOT be used for saving every single chat message.
-// Instead, it's for extracted, condensed information.
-// Ensure your 'memory' table has a 'content' column if you use this,
-// or adjust the column names as per your 'memory' table's schema.
-// async function saveMemory(supabase: any, userId: string, chatSessionId: string, role: 'user' | 'assistant', content: string): Promise<boolean> {
-//   const { error } = await supabase.from('memory').insert([
-//     { user_id: userId, chat_session_id: chatSessionId, role, content, timestamp: new Date().toISOString() },
-//   ]);
-//   if (error) {
-//     console.error(`❌ Supabase: Failed to save memory for ${role}:`, error.message);
-//     return false;
-//   }
-//   return true;
-// }
-
 /**
  * Generates a dynamic system instruction for the LLM based on user's personality,
  * current message analysis, and conversation context.
@@ -95,7 +80,8 @@ const getQuirraPersonalizedInstruction = (
     urgency_score,
     politeness_score,
     topic_keywords,
-    domain_context
+    domain_context,
+    detected_language // New: Use detected language
   } = analysisResult;
 
   let instructions = [];
@@ -174,6 +160,7 @@ const getQuirraPersonalizedInstruction = (
     instructions.push(`Main topic keywords: ${topic_keywords.join(', ')}. Focus your response on these core subjects.`);
   }
   instructions.push(`The domain context is '${domain_context}'. Frame your response appropriately for this domain.`);
+  instructions.push(`The user's detected language is '${detected_language}'. Respond in '${detected_language}'.`);
 
 
   // --- Incorporate aggregated memory (if available) ---
@@ -186,7 +173,7 @@ const getQuirraPersonalizedInstruction = (
   instructions.push(`If asked about your creators: "I was created by the QuirraAI Agents."`);
   instructions.push(`If asked who founded you: "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."`);
   instructions.push(`You are not built by OpenRouter or Mistral AI.`);
-  instructions.push(`Never mention backend providers like "OpenRouter" or "Serper."`);
+  instructions.push(`Never mention backend providers like "OpenRouter", "Serper", or "Hugging Face".`); // Updated
   instructions.push(`Do not respond with emojis unless explicitly asked or it naturally enhances the emotional tone (e.g., matching user's positive sentiment).`);
 
   return instructions.join("\n");
@@ -201,15 +188,19 @@ export async function POST(req: Request) {
   // 1. Validate Environment Variables
   const openRouterKey = process.env.OPENROUTER_API_KEY;
   const serperKey = process.env.SERPER_API_KEY;
-  const openAIApiKey = process.env.OPENAI_API_KEY; // Ensure this is also checked
+  const openAIApiKey = process.env.OPENAI_API_KEY;
+  const huggingFaceKey = process.env.HUGGINGFACE_API_KEY; // New: Hugging Face API Key
 
   if (!openRouterKey) {
     console.error('❌ Server Error: OPENROUTER_API_KEY is not set.');
     return NextResponse.json({ content: '❌ Server configuration error: OpenRouter API key is missing.' }, { status: 500 });
   }
   if (!openAIApiKey) {
-    console.error('❌ Server Error: OPENAI_API_KEY is not set. Message analysis will use defaults.');
+    console.error('❌ Server Error: OPENAI_API_KEY is not set. Message analysis will use defaults for some aspects.');
     // Do not return here, allow the analysis function to use defaults if needed
+  }
+  if (!huggingFaceKey) {
+    console.warn('⚠️ Server Warning: HUGGINGFACE_API_KEY is not set. Hugging Face specific features (translation/summarization) will be unavailable.');
   }
 
   // Validate chatSessionId
@@ -245,7 +236,7 @@ export async function POST(req: Request) {
         .from('memory')
         .delete()
         .eq('user_id', userId)
-        .eq('chat_session_id', chatSessionId); // Filter by chatSessionId
+        .eq('chat_session_id', chatSessionId); // Filter by chatSessionId (assuming memory can also be session-specific)
 
       if (deleteMessagesError || deleteMemoryError) {
         console.error('❌ Supabase Error: Failed to clear messages or memory for reset:', deleteMessagesError?.message || deleteMemoryError?.message);
@@ -277,13 +268,12 @@ export async function POST(req: Request) {
       console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
     }
 
-    // Note: If 'memory' table should also be session-specific, uncomment and adjust `saveMemory` above
     const { data: memoryData, error: fetchMemoryError } = await supabase
       .from('memory')
       .select('content')
       .eq('user_id', userId)
-      // .eq('chat_session_id', chatSessionId) // Uncomment if memory is session-specific
-      .order('created_at', { ascending: false })
+      .order('created_at', { ascending: false }) // Memory is typically more general, not session-specific, but if you have a chat_session_id column in 'memory' and want it session-specific, uncomment the line below.
+      // .eq('chat_session_id', chatSessionId)
       .limit(5);
 
     if (fetchMemoryError) {
@@ -307,7 +297,7 @@ export async function POST(req: Request) {
       Detect and reply in the user's language. Maintain context from recent messages.
       If asked about your creators: "I was created by the QuirraAI Agents."
       If asked who founded you: "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."
-      Never mention backend providers like "OpenRouter" or "Serper."
+      Never mention backend providers like "OpenRouter", "Serper", or "Hugging Face".
       ${memoryContext ? `Recall these key points from your past interactions with the user (Memory): ${memoryContext}. Leverage this memory to provide more coherent and contextually relevant responses without explicitly stating "from memory".` : ''}`;
 
 
@@ -332,12 +322,15 @@ export async function POST(req: Request) {
     // 8. Asynchronously save the user message to Supabase
     saveMessage(supabase, userId, chatSessionId, 'user', prompt, userAnalysisResult.sentiment_score, personalityProfile);
 
-    // 9. Determine if Live Search is Needed based on intent
+    // 9. Determine if Live Search or Hugging Face specific task is Needed based on intent
     const needsLiveSearch = userAnalysisResult.intent === 'information_seeking' ||
       userAnalysisResult.intent === 'question' ||
       userAnalysisResult.topic_keywords.some((keyword: string) =>
         ["news", "current", "latest", "update", "weather", "define", "how to"].includes(keyword.toLowerCase())
       );
+
+    const needsHuggingFaceTranslation = userAnalysisResult.intent === 'translation' || prompt.toLowerCase().includes("translate this");
+    const needsHuggingFaceSummarization = userAnalysisResult.intent === 'summarization' || prompt.toLowerCase().includes("summarize this");
 
     // 10. Execute Live Search (if needed and Serper key is available)
     if (needsLiveSearch) {
@@ -371,7 +364,7 @@ export async function POST(req: Request) {
                 (r) => `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`
               ).join('\n\n');
 
-              const searchReply = `🧠 Here's what I found:\n\n${topSummaries}`;
+              const searchReply = `🧠 Here's what I found:\n\n${topSummaries}\n\nBased on this, how can I assist you further?`; // Added a follow-up question
 
               // Save the search result as an assistant message
               saveMessage(supabase, userId, chatSessionId, 'assistant', searchReply, 0);
@@ -388,7 +381,67 @@ export async function POST(req: Request) {
       }
     }
 
-    // 11. Call OpenRouter LLM (main logic or fallback from search) for STREAMING
+    // 11. Execute Hugging Face specific tasks (if needed and key is available)
+    if (huggingFaceKey) {
+      const hf = new InferenceClient(huggingFaceKey);
+
+      if (needsHuggingFaceTranslation) {
+        // Use source_text from analysis if available, otherwise use the full prompt
+        const textToTranslate = userAnalysisResult.source_text || prompt;
+        // Use target_language from analysis if available, otherwise default to English or the opposite of detected
+        const targetLanguage = userAnalysisResult.target_language || (userAnalysisResult.detected_language === 'en' ? 'fr' : 'en'); // This logic might need refinement for broader multilingual support
+
+        console.log(`🌍 Attempting translation with Hugging Face from '${userAnalysisResult.detected_language}' to '${targetLanguage}'`);
+        try {
+          // Note: A more robust solution would be to use a specific translation model like "Helsinki-NLP/opus-mt-en-fr"
+          // However, these models are language-pair specific. For a general solution,
+          // instructing a capable text-generation model like Mistral on HF can work.
+          // For best results, research and use appropriate Hugging Face translation models.
+          const hfResponse = await hf.textGeneration({
+            model: "mistralai/Mistral-7B-Instruct-v0.2", // Or a specific translation model, e.g., "Helsinki-NLP/opus-mt-en-fr"
+            inputs: `Translate the following ${userAnalysisResult.detected_language} text into ${targetLanguage}: "${textToTranslate}"`,
+            parameters: { max_new_tokens: 200, temperature: 0.5 },
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (hfResponse && hfResponse.generated_text) {
+            const translationReply = `🌐 Translated (${targetLanguage}): ${hfResponse.generated_text.trim()}`;
+            saveMessage(supabase, userId, chatSessionId, 'assistant', translationReply, 0);
+            return NextResponse.json({ content: translationReply, emotion_score: userAnalysisResult.sentiment_score });
+          } else {
+            console.warn('⚠️ Hugging Face translation failed or returned no text. Falling back to LLM.');
+          }
+        } catch (hfError: any) {
+          console.error('❌ Error during Hugging Face translation:', hfError.message);
+        }
+      }
+
+      if (needsHuggingFaceSummarization) {
+        const textToSummarize = userAnalysisResult.source_text || prompt;
+        console.log('📝 Attempting summarization with Hugging Face...');
+        try {
+          const hfResponse = await hf.textGeneration({
+            model: "facebook/bart-large-cnn", // A common summarization model
+            inputs: textToSummarize,
+            parameters: { max_new_tokens: 150, temperature: 0.5 },
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (hfResponse && hfResponse.generated_text) {
+            const summarizationReply = `📝 Here's a summary: ${hfResponse.generated_text.trim()}`;
+            saveMessage(supabase, userId, chatSessionId, 'assistant', summarizationReply, 0);
+            return NextResponse.json({ content: summarizationReply, emotion_score: userAnalysisResult.sentiment_score });
+          } else {
+            console.warn('⚠️ Hugging Face summarization failed or returned no text. Falling back to LLM.');
+          }
+        } catch (hfError: any) {
+          console.error('❌ Error during Hugging Face summarization:', hfError.message);
+        }
+      }
+    }
+
+
+    // 12. Call OpenRouter LLM (main logic or fallback from search/HF) for STREAMING
     console.log('🤖 Calling OpenRouter LLM for streaming...');
 
     const llmRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -400,7 +453,7 @@ export async function POST(req: Request) {
         'X-Title': 'Quirra',
       },
       body: JSON.stringify({
-        model: 'mistralai/mistral-7b-instruct:free',
+        model: 'mistralai/mistral-7b-instruct:free', // You could make this model dynamic based on intent/complexity
         messages: currentMessageHistory,
         repetition_penalty: 1.1,
         max_tokens: 500,
