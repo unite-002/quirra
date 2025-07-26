@@ -6,6 +6,14 @@ import { createPagesBrowserClient } from '@supabase/auth-helpers-nextjs'
 import { type Session, type SupabaseClient } from '@supabase/supabase-js'
 import { useState, useEffect } from 'react' // Import useEffect and useState for the hook
 
+// Define the shape of personality profile for type safety
+interface PersonalityProfile {
+  learning_style: string;
+  communication_preference: string;
+  feedback_preference: string;
+  preferred_name: string | null;
+}
+
 // Initialize the Supabase client for client-side operations.
 // This client is used throughout your frontend application to interact with Supabase.
 export const supabase = createPagesBrowserClient()
@@ -56,55 +64,10 @@ export async function getSupabaseSession() {
   return { session, error };
 }
 
-// ✅ Save message to messages table
-export async function saveMessage(
-  role: 'user' | 'assistant',
-  content: string,
-  user_id: string
-): Promise<void> {
-  const { error } = await supabase.from('messages').insert([
-    {
-      user_id,
-      role,
-      content,
-    },
-  ])
+// *** IMPORTANT: saveMessage and saveMemory functions are NOT in this file. ***
+// They are now internal to the API routes that use them.
 
-  if (error) {
-    console.error(`❌ Failed to save ${role} message:`, error.message)
-    // In a real app, you might want to throw the error or return a status
-  } else {
-    console.log(`✅ ${role} message saved to Supabase.`);
-  }
-}
-
-// ✅ Save memory snapshot to memory table
-export async function saveMemory(
-  role: string, // Consider making role type-safe if possible (e.g., 'system' | 'summary')
-  content: string,
-  user_id: string
-): Promise<void> {
-  const { error } = await supabase.from('memory').insert([
-    {
-      user_id,
-      role,
-      content,
-      // Supabase's 'created_at' column typically handles timestamps automatically
-      // if configured correctly. Adding 'timestamp' explicitly might be redundant
-      // unless you need a custom timestamp field.
-      timestamp: new Date().toISOString(), // Use ISO string for consistency
-    },
-  ])
-
-  if (error) {
-    console.error('❌ Failed to save memory:', error.message)
-    // In a real app, you might want to throw the error or return a status
-  } else {
-    console.log('✅ Memory saved to Supabase.')
-  }
-}
-
-// Add a helper for signing out (though SignOutPage calls it directly)
+// Add a helper for signing out
 export async function signOutUser(): Promise<{ error: Error | null }> {
   const { error } = await supabase.auth.signOut();
   if (error) {
