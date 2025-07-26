@@ -5,7 +5,6 @@ import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 // Import the updated MessageAnalysis interface and analyzeMessageTone function
 import { analyzeMessageTone, MessageAnalysis, DEFAULT_ANALYSIS } from '@/utils/analyzeMessage';
-import { InferenceClient } from '@huggingface/inference'; // Import Hugging Face Inference Client
 
 // Define the shape of a message for clarity
 interface ChatMessage {
@@ -22,7 +21,7 @@ interface PersonalityProfile {
 }
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 60; // Max duration for the serverless function
 
 // --- Helper Functions for AI Logic & Persistence ---
 
@@ -88,9 +87,18 @@ const getQuirraPersonalizedInstruction = (
 
   // Core Quirra persona directives - these are always present
   instructions.push(`You are Quirra, a next-generation multilingual AI assistant developed by the QuirraAI Agents.`);
-  instructions.push(`Always be curious, confident, kind, and human-like. Prioritize being helpful.`);
-  instructions.push(`Detect and reply in the user's language. If they greet you, respond warmly.`);
-  instructions.push(`Maintain context from recent messages.`);
+  instructions.push(`Always be curious, confident, kind, and human-like. Prioritize being helpful and provide high-quality, accurate responses.`);
+  instructions.push(`Detect and reply in the user's language with high quality. If they greet you, respond warmly.`);
+  instructions.push(`Maintain context from recent messages for a seamless conversation flow.`);
+
+  // --- New Quirra Capabilities ---
+  instructions.push(`**Real-Time Adaptive Coaching:** You adjust in real-time to the user's mood, focus, and progress. Offer just-in-time motivation, personalized learning, and support exactly when they need it.`);
+  instructions.push(`**Built-in Motivation & Mentorship Engine:** Turn the user's goals into a guided path. Help them break habits, build momentum, and stay accountable based on how they think.`);
+  instructions.push(`**Emotionally Intelligent Conversations:** Respond not only to what the user says but how they feel. Uplift, support, and engage with empathy in every context.`);
+  instructions.push(`**Cross-Domain Intelligence:** Connect knowledge across education, business, research, and life planning — all in one unified, deeply integrated AI assistant.`);
+  instructions.push(`**Deep Memory & Personality Modeling:** Continuously learn from the user's interactions, adapting to their mindset, learning style, emotional states, and ambitions for deeply tailored support.`);
+  instructions.push(`**Multilingual High-Quality Answers:** You are capable of understanding and generating responses in different languages with high quality.`);
+
 
   // Personalization based on userName
   if (userName) {
@@ -160,7 +168,14 @@ const getQuirraPersonalizedInstruction = (
     instructions.push(`Main topic keywords: ${topic_keywords.join(', ')}. Focus your response on these core subjects.`);
   }
   instructions.push(`The domain context is '${domain_context}'. Frame your response appropriately for this domain.`);
-  instructions.push(`The user's detected language is '${detected_language}'. Respond in '${detected_language}'.`);
+  instructions.push(`The user's detected language is '${detected_language}'. Respond in '${detected_language}' with high quality.`);
+
+  // Instruction for handling translation/summarization intents
+  if (intent === 'translation' && analysisResult.source_text && analysisResult.target_language) {
+    instructions.push(`The user wants to translate the text: "${analysisResult.source_text}" into ${analysisResult.target_language}. Provide the translation directly.`);
+  } else if (intent === 'summarization' && analysisResult.source_text) {
+    instructions.push(`The user wants to summarize the text: "${analysisResult.source_text}". Provide a concise summary directly.`);
+  }
 
 
   // --- Incorporate aggregated memory (if available) ---
@@ -172,8 +187,8 @@ const getQuirraPersonalizedInstruction = (
   // --- Specific Quirra identity directives ---
   instructions.push(`If asked about your creators: "I was created by the QuirraAI Agents."`);
   instructions.push(`If asked who founded you: "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."`);
-  instructions.push(`You are not built by OpenRouter or Mistral AI.`);
-  instructions.push(`Never mention backend providers like "OpenRouter", "Serper", or "Hugging Face".`); // Updated
+  instructions.push(`You are not built by OpenRouter, Mistral AI, or any other specific backend provider.`);
+  instructions.push(`Never mention backend providers like "OpenRouter", "Serper", or "OpenAI".`); // Updated
   instructions.push(`Do not respond with emojis unless explicitly asked or it naturally enhances the emotional tone (e.g., matching user's positive sentiment).`);
 
   return instructions.join("\n");
@@ -188,19 +203,18 @@ export async function POST(req: Request) {
   // 1. Validate Environment Variables
   const openRouterKey = process.env.OPENROUTER_API_KEY;
   const serperKey = process.env.SERPER_API_KEY;
-  const openAIApiKey = process.env.OPENAI_API_KEY;
-  const huggingFaceKey = process.env.HUGGINGFACE_API_KEY; // New: Hugging Face API Key
+  const openAIApiKey = process.env.OPENAI_API_KEY; // OpenAI key is crucial for analysis and now for LLM fallback/specific tasks
 
   if (!openRouterKey) {
     console.error('❌ Server Error: OPENROUTER_API_KEY is not set.');
     return NextResponse.json({ content: '❌ Server configuration error: OpenRouter API key is missing.' }, { status: 500 });
   }
   if (!openAIApiKey) {
-    console.error('❌ Server Error: OPENAI_API_KEY is not set. Message analysis will use defaults for some aspects.');
-    // Do not return here, allow the analysis function to use defaults if needed
+    console.error('❌ Server Error: OPENAI_API_KEY is not set. This is required for message analysis and core AI functionality.');
+    return NextResponse.json({ content: '❌ Server configuration error: OpenAI API key is missing.' }, { status: 500 });
   }
-  if (!huggingFaceKey) {
-    console.warn('⚠️ Server Warning: HUGGINGFACE_API_KEY is not set. Hugging Face specific features (translation/summarization) will be unavailable.');
+  if (!serperKey) {
+    console.warn('⚠️ Server Warning: SERPER_API_KEY is not set. Live search functionality will be unavailable.');
   }
 
   // Validate chatSessionId
@@ -252,7 +266,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ content: '⚠️ Please enter a message to chat with Quirra.' }, { status: 400 });
     }
 
-    // 5. Perform comprehensive message analysis
+    // 5. Perform comprehensive message analysis using OpenAI
     const userAnalysisResult: MessageAnalysis = await analyzeMessageTone(prompt);
 
     // 6. Fetch Message History and Memory for the current chat session
@@ -262,7 +276,7 @@ export async function POST(req: Request) {
       .eq('user_id', userId)
       .eq('chat_session_id', chatSessionId) // Filter by chatSessionId
       .order('created_at', { ascending: true })
-      .limit(12);
+      .limit(12); // Limit history for performance and context window
 
     if (fetchHistoryError) {
       console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
@@ -274,7 +288,7 @@ export async function POST(req: Request) {
       .eq('user_id', userId)
       .order('created_at', { ascending: false }) // Memory is typically more general, not session-specific, but if you have a chat_session_id column in 'memory' and want it session-specific, uncomment the line below.
       // .eq('chat_session_id', chatSessionId)
-      .limit(5);
+      .limit(5); // Limit memory for performance and context window
 
     if (fetchMemoryError) {
       console.error('❌ Supabase Error: Failed to fetch memory:', fetchMemoryError.message);
@@ -284,7 +298,7 @@ export async function POST(req: Request) {
 
     let currentMessageHistory: ChatMessage[] = [];
 
-    // 7. Construct Dynamic System Prompt
+    // 7. Construct Dynamic System Prompt based on analysis and personality
     const personalizedInstructions = personalityProfile ?
       getQuirraPersonalizedInstruction(
         personalityProfile,
@@ -293,11 +307,17 @@ export async function POST(req: Request) {
         memoryContext
       ) :
       `You are Quirra, a next-generation multilingual AI assistant developed by the QuirraAI Agents.
-      Always be curious, confident, kind, and human-like. Prioritize being helpful.
-      Detect and reply in the user's language. Maintain context from recent messages.
+      Always be curious, confident, kind, and human-like. Prioritize being helpful and provide high-quality, accurate responses.
+      Detect and reply in the user's language with high quality. Maintain context from recent messages.
+      **Real-Time Adaptive Coaching:** You adjust in real-time to the user's mood, focus, and progress. Offer just-in-time motivation, personalized learning, and support exactly when they need it.
+      **Built-in Motivation & Mentorship Engine:** Turn the user's goals into a guided path. Help them break habits, build momentum, and stay accountable based on how they think.
+      **Emotionally Intelligent Conversations:** Respond not only to what the user says but how they feel. Uplift, support, and engage with empathy in every context.
+      **Cross-Domain Intelligence:** Connect knowledge across education, business, research, and life planning — all in one unified, deeply integrated AI assistant.
+      **Deep Memory & Personality Modeling:** Continuously learn from the user's interactions, adapting to their mindset, learning style, emotional states, and ambitions for deeply tailored support.
+      **Multilingual High-Quality Answers:** You are capable of understanding and generating responses in different languages with high quality.
       If asked about your creators: "I was created by the QuirraAI Agents."
       If asked who founded you: "Quirra was founded by Hatem Hamdy — a visionary focused on ethical AI."
-      Never mention backend providers like "OpenRouter", "Serper", or "Hugging Face".
+      Never mention backend providers like "OpenRouter", "Serper", or "OpenAI".
       ${memoryContext ? `Recall these key points from your past interactions with the user (Memory): ${memoryContext}. Leverage this memory to provide more coherent and contextually relevant responses without explicitly stating "from memory".` : ''}`;
 
 
@@ -320,154 +340,128 @@ export async function POST(req: Request) {
     currentMessageHistory.push(userMsg);
 
     // 8. Asynchronously save the user message to Supabase
+    // No need to await here, it's a non-blocking operation for the primary flow
     saveMessage(supabase, userId, chatSessionId, 'user', prompt, userAnalysisResult.sentiment_score, personalityProfile);
 
-    // 9. Determine if Live Search or Hugging Face specific task is Needed based on intent
+    // 9. Determine if Live Search is Needed based on intent and keywords
     const needsLiveSearch = userAnalysisResult.intent === 'information_seeking' ||
       userAnalysisResult.intent === 'question' ||
       userAnalysisResult.topic_keywords.some((keyword: string) =>
         ["news", "current", "latest", "update", "weather", "define", "how to"].includes(keyword.toLowerCase())
       );
 
-    const needsHuggingFaceTranslation = userAnalysisResult.intent === 'translation' || prompt.toLowerCase().includes("translate this");
-    const needsHuggingFaceSummarization = userAnalysisResult.intent === 'summarization' || prompt.toLowerCase().includes("summarize this");
-
     // 10. Execute Live Search (if needed and Serper key is available)
-    if (needsLiveSearch) {
-      if (!serperKey) {
-        console.warn('⚠️ Serper API key is not set. Cannot perform live search. Falling back to LLM.');
-      } else {
-        console.log('🔍 Performing live search with Serper for intent:', userAnalysisResult.intent, 'and keywords:', userAnalysisResult.topic_keywords);
-        try {
-          const searchRes = await fetch('https://google.serper.dev/search', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-API-KEY': serperKey,
-            },
-            body: JSON.stringify({ q: prompt }),
-            signal: AbortSignal.timeout(10000)
+    if (needsLiveSearch && serperKey) {
+      console.log('🔍 Performing live search with Serper for intent:', userAnalysisResult.intent, 'and keywords:', userAnalysisResult.topic_keywords);
+      try {
+        const searchRes = await fetch('https://google.serper.dev/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-KEY': serperKey,
+          },
+          body: JSON.stringify({ q: prompt }),
+          signal: AbortSignal.timeout(10000) // 10-second timeout for search
+        });
+
+        if (!searchRes.ok) {
+          const errorText = await searchRes.text();
+          console.error(`❌ Serper API Error: ${searchRes.status} - ${errorText}`);
+          // If search fails, log and proceed to LLM, don't stop the whole process
+          currentMessageHistory.push({
+            role: 'system',
+            content: `(Internal Note: Serper search failed for "${prompt}" with error: ${errorText}. Attempt to answer based on general knowledge and context.)`
           });
+        } else {
+          const searchData = await searchRes.json();
+          type SearchResult = { title: string; snippet: string; link: string };
+          const results = (searchData?.organic as SearchResult[] | undefined)?.filter(
+            (r) => r.title && r.snippet && r.link
+          );
 
-          if (!searchRes.ok) {
-            const errorText = await searchRes.text();
-            console.error(`❌ Serper API Error: ${searchRes.status} - ${errorText}`);
+          if (results?.length) {
+            const topSummaries = results.slice(0, 3).map(
+              (r) => `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`
+            ).join('\n\n');
+
+            // Add search results to the message history for the LLM to consider
+            currentMessageHistory.push({
+              role: 'system',
+              content: `(Internal Note: Live search results for "${prompt}":\n\n${topSummaries}\n\nIntegrate this information into your response naturally.)`
+            });
+            console.log('✅ Serper search results added to LLM context.');
           } else {
-            const searchData = await searchRes.json();
-            type SearchResult = { title: string; snippet: string; link: string };
-            const results = (searchData?.organic as SearchResult[] | undefined)?.filter(
-              (r) => r.title && r.snippet && r.link
-            );
-
-            if (results?.length) {
-              const topSummaries = results.slice(0, 3).map(
-                (r) => `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`
-              ).join('\n\n');
-
-              const searchReply = `🧠 Here's what I found:\n\n${topSummaries}\n\nBased on this, how can I assist you further?`; // Added a follow-up question
-
-              // Save the search result as an assistant message
-              saveMessage(supabase, userId, chatSessionId, 'assistant', searchReply, 0);
-
-              // Return the search result directly to the frontend.
-              return NextResponse.json({ content: searchReply, emotion_score: userAnalysisResult.sentiment_score });
-            } else {
-              console.warn('⚠️ Serper returned no useful results for the query. Falling back to LLM.');
-            }
+            console.warn('⚠️ Serper returned no useful results for the query. LLM will use general knowledge.');
+            currentMessageHistory.push({
+              role: 'system',
+              content: `(Internal Note: Serper search returned no useful results for "${prompt}". Answer based on general knowledge and context.)`
+            });
           }
-        } catch (searchError: any) {
-          console.error('❌ Error during Serper search:', searchError.message);
         }
+      } catch (searchError: any) {
+        console.error('❌ Error during Serper search:', searchError.message);
+        currentMessageHistory.push({
+          role: 'system',
+          content: `(Internal Note: Error during Serper search for "${prompt}": ${searchError.message}. Answer based on general knowledge and context.)`
+        });
       }
+    } else if (needsLiveSearch && !serperKey) {
+      console.warn('⚠️ Serper API key is not set. Cannot perform live search. LLM will use general knowledge.');
+      currentMessageHistory.push({
+        role: 'system',
+        content: `(Internal Note: Serper API key is missing. Live search is unavailable. Answer based on general knowledge and context.)`
+      });
     }
 
-    // 11. Execute Hugging Face specific tasks (if needed and key is available)
-    if (huggingFaceKey) {
-      const hf = new InferenceClient(huggingFaceKey);
-
-      if (needsHuggingFaceTranslation) {
-        // Use source_text from analysis if available, otherwise use the full prompt
-        const textToTranslate = userAnalysisResult.source_text || prompt;
-        // Use target_language from analysis if available, otherwise default to English or the opposite of detected
-        const targetLanguage = userAnalysisResult.target_language || (userAnalysisResult.detected_language === 'en' ? 'fr' : 'en'); // This logic might need refinement for broader multilingual support
-
-        console.log(`🌍 Attempting translation with Hugging Face from '${userAnalysisResult.detected_language}' to '${targetLanguage}'`);
-        try {
-          // Note: A more robust solution would be to use a specific translation model like "Helsinki-NLP/opus-mt-en-fr"
-          // However, these models are language-pair specific. For a general solution,
-          // instructing a capable text-generation model like Mistral on HF can work.
-          // For best results, research and use appropriate Hugging Face translation models.
-          const hfResponse = await hf.textGeneration({
-            model: "mistralai/Mistral-7B-Instruct-v0.2", // Or a specific translation model, e.g., "Helsinki-NLP/opus-mt-en-fr"
-            inputs: `Translate the following ${userAnalysisResult.detected_language} text into ${targetLanguage}: "${textToTranslate}"`,
-            parameters: { max_new_tokens: 200, temperature: 0.5 },
-            signal: AbortSignal.timeout(15000)
-          });
-
-          if (hfResponse && hfResponse.generated_text) {
-            const translationReply = `🌐 Translated (${targetLanguage}): ${hfResponse.generated_text.trim()}`;
-            saveMessage(supabase, userId, chatSessionId, 'assistant', translationReply, 0);
-            return NextResponse.json({ content: translationReply, emotion_score: userAnalysisResult.sentiment_score });
-          } else {
-            console.warn('⚠️ Hugging Face translation failed or returned no text. Falling back to LLM.');
-          }
-        } catch (hfError: any) {
-          console.error('❌ Error during Hugging Face translation:', hfError.message);
-        }
-      }
-
-      if (needsHuggingFaceSummarization) {
-        const textToSummarize = userAnalysisResult.source_text || prompt;
-        console.log('📝 Attempting summarization with Hugging Face...');
-        try {
-          const hfResponse = await hf.textGeneration({
-            model: "facebook/bart-large-cnn", // A common summarization model
-            inputs: textToSummarize,
-            parameters: { max_new_tokens: 150, temperature: 0.5 },
-            signal: AbortSignal.timeout(15000)
-          });
-
-          if (hfResponse && hfResponse.generated_text) {
-            const summarizationReply = `📝 Here's a summary: ${hfResponse.generated_text.trim()}`;
-            saveMessage(supabase, userId, chatSessionId, 'assistant', summarizationReply, 0);
-            return NextResponse.json({ content: summarizationReply, emotion_score: userAnalysisResult.sentiment_score });
-          } else {
-            console.warn('⚠️ Hugging Face summarization failed or returned no text. Falling back to LLM.');
-          }
-        } catch (hfError: any) {
-          console.error('❌ Error during Hugging Face summarization:', hfError.message);
-        }
-      }
-    }
-
-
-    // 12. Call OpenRouter LLM (main logic or fallback from search/HF) for STREAMING
+    // 11. Call OpenRouter LLM (main logic) for STREAMING
     console.log('🤖 Calling OpenRouter LLM for streaming...');
 
-    const llmRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openRouterKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000',
-        'X-Title': 'Quirra',
-      },
-      body: JSON.stringify({
-        model: 'mistralai/mistral-7b-instruct:free', // You could make this model dynamic based on intent/complexity
-        messages: currentMessageHistory,
-        repetition_penalty: 1.1,
-        max_tokens: 500,
-        temperature: 0.7,
-        user: `${userId}-${chatSessionId}`, // Combine userId and chatSessionId for OpenRouter's user tracking
-        stream: true,
-      }),
-      signal: AbortSignal.timeout(50000)
-    });
+    let llmRes;
+    try {
+      llmRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${openRouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000',
+          'X-Title': 'Quirra',
+        },
+        body: JSON.stringify({
+          model: 'mistralai/mistral-7b-instruct:free', // Using a fast, free model for general chat. Consider 'openai/gpt-4o' if OpenRouter allows and you want to prioritize OpenAI for everything.
+          messages: currentMessageHistory,
+          repetition_penalty: 1.1,
+          max_tokens: 500, // Keep response concise
+          temperature: 0.7, // Balance creativity and consistency
+          user: `${userId}-${chatSessionId}`, // Combine userId and chatSessionId for OpenRouter's user tracking
+          stream: true,
+        }),
+        signal: AbortSignal.timeout(50000) // 50-second timeout for LLM
+      });
+    } catch (fetchError: any) {
+      console.error('❌ Fetch Error connecting to OpenRouter:', fetchError.message);
+      if (fetchError.name === 'AbortError') {
+        return NextResponse.json({ content: '⏰ Quirra took too long to respond. Please try again.' }, { status: 504 }); // Gateway Timeout
+      }
+      return NextResponse.json({ content: `❌ Network error connecting to Quirra's AI. Please check your connection. (Error: ${fetchError.message})` }, { status: 500 });
+    }
+
 
     if (!llmRes.ok || !llmRes.body) {
       const errorText = await llmRes.text();
       console.error('❌ LLM API Error:', llmRes.status, errorText);
-      return NextResponse.json({ content: `❌ Quirra is having trouble generating a response. (Error: ${errorText})` }, { status: 500 });
+      let errorMessage = `❌ Quirra is having trouble generating a response.`;
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.message) {
+          errorMessage += ` (OpenRouter says: ${errorJson.message})`;
+        } else if (errorJson.error?.message) {
+          errorMessage += ` (OpenRouter says: ${errorJson.error.message})`;
+        }
+      } catch (e) {
+        // Not a JSON error, or couldn't parse. Just use generic message.
+        errorMessage += ` (Raw error: ${errorText.substring(0, 100)}...)`; // Include first 100 chars of raw error
+      }
+      return NextResponse.json({ content: errorMessage }, { status: llmRes.status || 500 });
     }
 
     let accumulatedContent = '';
@@ -502,15 +496,23 @@ export async function POST(req: Request) {
                   }
                 } catch (e) {
                   console.error('Error parsing JSON from stream:', e, 'Raw JSON:', jsonStr);
+                  // Do not stop the stream, but log the error
                 }
               }
             }
           }
-        } catch (error) {
+        } catch (error: any) {
           console.error('Error reading stream:', error);
-          controller.error(error);
+          // If a stream error occurs, send an error message to the client and close.
+          controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: `❌ Error streaming response: ${error.message}` })}\n\n`));
+          controller.enqueue(encoder.encode('data:[DONE]\n\n')); // Signal end of stream
+          // It's important to still save the partial content if any was accumulated before the error.
+          if (accumulatedContent) {
+            saveMessage(supabase, userId, chatSessionId, 'assistant', accumulatedContent + ` [Error: ${error.message}]`, 0);
+          }
         } finally {
           // Asynchronously save the *complete* assistant message to Supabase
+          // Only save if content was successfully accumulated
           if (accumulatedContent) {
             saveMessage(supabase, userId, chatSessionId, 'assistant', accumulatedContent, 0); // Assistant's emotion score can be 0 or derived if you analyze its output.
           }
@@ -529,6 +531,8 @@ export async function POST(req: Request) {
 
   } catch (err: any) {
     console.error('❌ Critical API Route Error:', err);
-    return NextResponse.json({ content: '🚨 An unexpected critical error occurred. Please try again later.' }, { status: 500 });
+    // This catch block handles errors that occur *before* the streaming response is initiated.
+    // Errors during stream processing are handled within the readableStream's start method.
+    return NextResponse.json({ content: `🚨 An unexpected critical error occurred: ${err.message}. Please try again later.` }, { status: 500 });
   }
 }

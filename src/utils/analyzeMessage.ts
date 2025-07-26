@@ -4,7 +4,7 @@
 export interface MessageAnalysis {
   mood: string; // e.g., happy, sad, frustrated, curious, neutral, confused, excited
   tone: string; // e.g., formal, casual, aggressive, warm, sarcastic, objective, passive-aggressive, appreciative
-  intent: string; // e.g., question, complaint, feedback, casual_talk, instruction, request, information_seeking, problem_reporting, greeting
+  intent: string; // e.g., question, complaint, feedback, casual_talk, instruction, request, information_seeking, problem_reporting, greeting, translation, summarization
   sentiment_score: number; // -1.0 (very negative) to 1.0 (very positive)
   sentiment_label: 'positive' | 'negative' | 'neutral' | 'mixed'; // Categorical sentiment
   formality_score: number; // 0.0 (very casual) to 1.0 (very formal)
@@ -109,11 +109,11 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
             },
             source_text: { // NEW OPTIONAL FIELD
                 type: "string",
-                description: "If the intent is 'translation' or 'summarization', this is the specific segment of the user's message that needs processing. Otherwise, leave null."
+                description: "If the intent is 'translation' or 'summarization', this is the specific segment of the user's message that needs processing. Otherwise, leave null. For translation, this should be the text to be translated. For summarization, this should be the text to be summarized."
             },
             target_language: { // NEW OPTIONAL FIELD
                 type: "string",
-                description: "If the intent is 'translation', this is the ISO 639-1 two-letter code for the desired target language. Otherwise, leave null."
+                description: "If the intent is 'translation', this is the ISO 639-1 two-letter code for the desired target language (e.g., 'es' for Spanish, 'fr' for French). Otherwise, leave null."
             }
           },
           required: [
@@ -138,7 +138,7 @@ export async function analyzeMessageTone(message: string): Promise<MessageAnalys
   const promptMessages = [
     {
       role: "system",
-      content: `You are an expert communication analyst. Your sole purpose is to analyze the user's message thoroughly and provide precise attributes using the 'analyze_message' tool. You MUST respond ONLY by calling this tool. Ensure all fields, including the detected language, are accurately filled. If the user's intent is 'translation' or 'summarization', identify the 'source_text' to be processed and for translation, the 'target_language'.`
+      content: `You are an expert communication analyst. Your sole purpose is to analyze the user's message thoroughly and provide precise attributes using the 'analyze_message' tool. You MUST respond ONLY by calling this tool. Ensure all fields, including the detected language, are accurately filled. If the user's intent is 'translation' or 'summarization', identify the 'source_text' to be processed and for translation, the 'target_language'. Prioritize accuracy and completeness in your analysis.`
     },
     {
       role: "user",
