@@ -1,17 +1,15 @@
-
 // src/app/api/summarize/route.ts
 
 import { NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
-import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// --- OpenRouter Configuration ---
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || 'YOUR_OPENROUTER_API_KEY_HERE';
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Define the shape of personality profile for type safety (copied from chat/page.tsx)
 // This interface is only here for type clarity if needed, but not directly used in saveMemory itself.
@@ -61,6 +59,12 @@ async function saveMemory(
 export async function POST(req: Request) {
   const supabase = createRouteHandlerClient({ cookies });
 
+  // Crucial check for OpenRouter API key
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === 'YOUR_OPENROUTER_API_KEY_HERE') {
+    console.error('❌ Server Error: OPENROUTER_API_KEY is not set. Cannot perform summarization.');
+    return NextResponse.json({ message: 'Server configuration error: OpenRouter API key is missing. This is essential for summarization.' }, { status: 500 });
+  }
+
   try {
     // 1. Authenticate User
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -80,7 +84,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Invalid input for summarization.' }, { status: 400 });
     }
 
-    // Prepare messages for OpenAI summarization
+    // Prepare messages for OpenRouter summarization
     const messagesForSummarization = [
       {
         role: 'system' as const,
@@ -92,18 +96,35 @@ export async function POST(req: Request) {
       })),
     ];
 
-    // 3. Use OpenAI to generate a concise summary
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo', // A cost-effective model for summarization
-      messages: messagesForSummarization,
-      temperature: 0.2, // Low temperature for factual, consistent summaries
-      max_tokens: 150, // Keep summaries concise
+    // 3. Use OpenRouter to generate a concise summary
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'YOUR_SITE_URL_HERE', // Replace with your actual site URL
+        'X-Title': 'Quirra AI Prototype - Summarization', // Replace with your app title
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v3-0324:free', // A cost-effective and capable model for summarization
+        messages: messagesForSummarization,
+        temperature: 0.2, // Low temperature for factual, consistent summaries
+        max_tokens: 150, // Keep summaries concise
+      }),
+      signal: AbortSignal.timeout(10000) // 10 second timeout for summarization
     });
 
-    const summaryContent = completion.choices[0].message.content?.trim();
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error(`❌ OpenRouter Summarization API HTTP error: ${response.status} - ${response.statusText}`, errorData);
+      throw new Error(`OpenRouter API Error during summarization: ${errorData.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    const summaryContent = data.choices?.[0]?.message?.content?.trim();
 
     if (!summaryContent) {
-      console.warn('⚠️ OpenAI returned an empty summary for session:', chatSessionId);
+      console.warn('⚠️ OpenRouter returned an empty summary for session:', chatSessionId);
       return NextResponse.json({ message: 'No summary generated.' }, { status: 200 });
     }
 
@@ -124,15 +145,16 @@ export async function POST(req: Request) {
     let statusCode = 500;
     let message = 'An unexpected error occurred during summarization.';
 
-    if (err.name === 'AuthenticationError') {
-      statusCode = 401;
-      message = 'Authentication failed.';
-    } else if (err.name === 'BadRequestError') {
-      statusCode = 400;
-      message = 'Invalid request for summarization.';
-    } else if (err.name === 'APIError') {
-      statusCode = err.status || 500;
-      message = `OpenAI API Error during summarization: ${err.message}`;
+    // Check for specific error types from fetch or JSON parsing
+    if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
+        statusCode = 503; // Service Unavailable
+        message = 'Network error connecting to the summarization service.';
+    } else if (err.message.includes('timeout')) {
+        statusCode = 504; // Gateway Timeout
+        message = 'Summarization request timed out.';
+    } else if (err.message.includes('OpenRouter API Error')) {
+        statusCode = err.status || 500; // Use status from OpenRouter if available
+        message = `OpenRouter API Error during summarization: ${err.message}`;
     }
 
     return NextResponse.json({ message: `Failed to summarize conversation: ${message}` }, { status: statusCode });
