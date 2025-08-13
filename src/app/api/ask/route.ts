@@ -1,10 +1,20 @@
-// src/app/api/ask/route.ts
-
 import { NextResponse } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 import { analyzeMessage, MessageAnalysis, DEFAULT_ANALYSIS } from '@/utils/analyzeMessage';
 import { summarizeEmotionalTrends } from '@/utils/summarizeEmotionalTrends';
+import { performance } from 'perf_hooks';
+import { IncomingForm } from 'formidable';
+import type { Fields, Files } from 'formidable';
+import fs from 'fs';
+import path from 'path';
+import util from 'util';
+import pdf from 'pdf-parse';
+import mammoth from 'mammoth';
+
+// Promisify the file parsing function for async/await usage
+const readFileAsync = util.promisify(fs.readFile);
+const renameAsync = util.promisify(fs.rename);
 
 // Define the shape of a message for clarity
 interface ChatMessage {
@@ -66,22 +76,22 @@ export const maxDuration = 300; // Increased max duration for longer operations
 // Define how often to trigger emotional trend summarization
 const MESSAGE_COUNT_FOR_EMOTIONAL_SUMMARY = 5; // Trigger summarization every 5 user messages
 const PROACTIVE_CHECKIN_INTERVAL_HOURS = 24; // Trigger proactive check-in every 24 hours
-
-// --- IMPORTANT TOKEN LIMIT FOR PROTOTYPE ---
-// User requested 2000 tokens per user per day.
-const DAILY_TOKEN_LIMIT = 2000;
+const DAILY_TOKEN_LIMIT = 50000; // 50,000 tokens per user per day for the prototype - ADJUST AS NEEDED!
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 // --- OpenRouter Configuration ---
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || 'YOUR_OPENROUTER_API_KEY_HERE';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-// --- Model Definitions and Capabilities for OpenRouter ---
-// These are the models you want to use via OpenRouter, along with
-// a brief description of their strengths for routing purposes.
-// Note: ":free" suffix indicates models that are free on OpenRouter,
-// but they still have rate limits. Paid models will incur costs.
-// With 2000 tokens/day, we can leverage paid models more frequently for higher quality.
+// --- Model Definitions and Capabilities for OpenRouter (UPDATED) ---
 const MODELS = {
+  'Kimi K2': {
+    name: 'moonshot-ai/kimi-k2',
+    description: 'Specialized for long context, excellent for summarizing lengthy documents and complex information.',
+    keywords: ['summarize', 'long document', 'text analysis', 'context'],
+    context: 2000000, // Very long context
+    isFree: true,
+  },
   'GLM 4.5 Air': {
     name: 'z-ai/glm-4.5-air:free',
     description: 'Fast, efficient, good for quick responses and general chat.',
@@ -96,86 +106,64 @@ const MODELS = {
     context: 262144, // 262K tokens
     isFree: true,
   },
+  'DeepSeek-R1-0528': {
+    name: 'deepseek/deepseek-r1-0528',
+    description: 'A powerful general-purpose model with strong reasoning and instruction-following abilities.',
+    keywords: ['reason', 'logic', 'problem-solving', 'detailed', 'analysis', 'instruction'],
+    context: 262144, // 262K tokens
+    isFree: true,
+  },
   'DeepSeek-V3': {
     name: 'deepseek/deepseek-v3-0324:free',
-    description: 'Strong general reasoning, complex problem-solving, and detailed analysis. Good for summarization and translation.',
-    keywords: ['analyze', 'reason', 'complex', 'problem', 'deep', 'research', 'explain', 'detailed', 'logic', 'breakdown', 'summarize', 'summary', 'translate', 'translation'],
+    description: 'Strong general reasoning, complex problem-solving, and detailed analysis.',
+    keywords: ['analyze', 'reason', 'complex', 'problem', 'deep', 'research', 'explain', 'detailed', 'logic', 'breakdown'],
     context: 163840, // 164K tokens
     isFree: true,
   },
-  'Claude Sonnet 4': {
-    name: 'anthropic/claude-sonnet-4',
-    description: 'Balanced intelligence, strong for creative writing, nuanced conversations, and content generation. Excellent for empathy and long-form text.',
-    keywords: ['creative', 'write', 'story', 'nuance', 'conversation', 'content', 'art', 'narrative', 'poem', 'essay', 'feel', 'emotion', 'support', 'empathy', 'long response', 'detailed explanation'],
-    context: 200000, // 200K tokens
-    isFree: false, // This is a paid model
+  'Mixtral 8x7B': {
+    name: 'mistralai/mixtral-8x7b-instruct',
+    description: 'High-quality, fast, and versatile model, great for complex instructions and creative tasks.',
+    keywords: ['complex', 'creative', 'versatile', 'general', 'high-quality', 'instruction'],
+    context: 32768, // 32K tokens
+    isFree: true,
   },
-  'Gemini 2.5 Pro': {
-    name: 'google/gemini-2.5-pro',
-    description: 'Highly capable across many domains, strong for multi-modal tasks (if enabled by OpenRouter), and versatile. Good for structured output.',
-    keywords: ['versatile', 'general', 'multi-modal', 'broad', 'information', 'diverse', 'comprehensive', 'fact', 'data', 'structured', 'extract', 'list', 'table'],
-    context: 1000000, // 1M+ tokens
-    isFree: false, // This is a paid model
-  },
-  'GPT-4.1': {
-    name: 'openai/gpt-4-turbo', // Using gpt-4-turbo as a placeholder for "GPT-4.1" as it's the latest widely available. OpenRouter might have a specific "4.1" slug.
-    description: 'Top-tier reasoning, advanced coding, long-context understanding, and instruction following. Best for complex, critical tasks and search integration.',
-    keywords: ['advanced', 'expert', 'long document', 'precise', 'instruction', 'high-quality', 'critical', 'complex problem', 'summarize large', 'strategy', 'plan', 'optimize'],
-    context: 128000, // 128K tokens for turbo
-    isFree: false, // This is a paid model
+  'Starcoder2 15B': {
+    name: 'google/starcoder2-15b',
+    description: 'Specialized for coding, code generation, and understanding programming concepts, successor to Starcoder.',
+    keywords: ['code', 'program', 'develop', 'debug', 'syntax', 'script', 'coding', 'software', 'javascript', 'python', 'html', 'css'],
+    context: 16384, // 16K tokens
+    isFree: true,
   },
 };
 
-// --- Model Selection Logic ---
-// This function determines which model to use based on the user's prompt and analysis.
-// It prioritizes models based on detected intent, domain, and keywords,
-// aiming for efficiency (free/fast models) where appropriate, and power (paid models) for complex tasks.
-// With 2000 tokens/day, we can be more generous with paid models for quality.
-function selectModel(prompt: string, analysisResult: MessageAnalysis, needsLiveSearch: boolean): string {
+// --- Model Selection Logic (UPDATED for parallel dispatch) ---
+// This function determines which models to query based on the user's prompt.
+function getRelevantModels(prompt: string): string[] {
   const lowerCasePrompt = prompt.toLowerCase();
-  const { intent, domain_context, topic_keywords } = analysisResult;
+  const selectedModels = new Set<string>();
 
-  // 1. Prioritize models for specific, high-value intents (can now include paid models more readily)
-  if (intent === 'coding' || domain_context === 'programming' || topic_keywords.some(k => MODELS['Qwen3 Coder'].keywords.includes(k))) {
-    return MODELS['Qwen3 Coder'].name; // Qwen3 Coder for coding (FREE)
+  // Prioritize specialized models based on keywords
+  if (MODELS['Qwen3 Coder'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
+    selectedModels.add(MODELS['Qwen3 Coder'].name);
   }
-  if (intent === 'geocoding' || intent === 'directions' || intent === 'matrix' || intent === 'isochrones' || intent === 'elevation' || domain_context === 'geospatial') {
-    return MODELS['DeepSeek-V3'].name; // DeepSeek-V3 for geospatial tasks (FREE)
+  if (MODELS['Starcoder2 15B'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
+    selectedModels.add(MODELS['Starcoder2 15B'].name);
   }
-  if (intent === 'summarization' || intent === 'translation' || topic_keywords.some(k => ['summary', 'summarize', 'translate', 'translation'].includes(k))) {
-    return MODELS['DeepSeek-V3'].name; // DeepSeek-V3 for summarization/translation (FREE)
-  }
-  if (intent === 'creative_writing' || domain_context === 'creative' || topic_keywords.some(k => MODELS['Claude Sonnet 4'].keywords.includes(k))) {
-    return MODELS['Claude Sonnet 4'].name; // Claude Sonnet 4 for creative tasks (PAID)
-  }
-  if (intent === 'problem_solving' || intent === 'brainstorming' || domain_context === 'business' || topic_keywords.some(k => ['strategy', 'plan', 'optimize'].includes(k))) {
-    return MODELS['GPT-4.1'].name; // GPT-4.1 for complex problem-solving/strategy (PAID)
-  }
-  if (intent === 'self-reflection' || domain_context === 'wellness' || domain_context === 'personal' || topic_keywords.some(k => MODELS['Claude Sonnet 4'].keywords.includes(k))) {
-    return MODELS['Claude Sonnet 4'].name; // Claude Sonnet 4 for emotional support/personal reflection (PAID)
-  }
-  if (needsLiveSearch || intent === 'information_seeking' || intent === 'question') {
-    return MODELS['GPT-4.1'].name; // GPT-4.1 for search integration (PAID)
-  }
-
-  // 2. Fallback to general-purpose models based on complexity/nuance
-  // With a higher token limit, we can be more aggressive in using powerful models for general queries
-  // if they align with their strengths.
-  if (MODELS['GPT-4.1'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
-    return MODELS['GPT-4.1'].name; // GPT-4.1 for advanced general queries
-  }
-  if (MODELS['Gemini 2.5 Pro'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
-    return MODELS['Gemini 2.5 Pro'].name; // Gemini 2.5 Pro for versatile/broad queries
-  }
-  if (MODELS['Claude Sonnet 4'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
-    return MODELS['Claude Sonnet 4'].name; // Claude Sonnet 4 for nuanced/conversational queries
+  if (MODELS['DeepSeek-R1-0528'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
+    selectedModels.add(MODELS['DeepSeek-R1-0528'].name);
   }
   if (MODELS['DeepSeek-V3'].keywords.some(keyword => lowerCasePrompt.includes(keyword))) {
-    return MODELS['DeepSeek-V3'].name; // DeepSeek-V3 for general reasoning/analysis
+    selectedModels.add(MODELS['DeepSeek-V3'].name);
+  }
+  if (MODELS['Kimi K2'].keywords.some(keyword => lowerCasePrompt.includes(keyword)) || prompt.length > 200) {
+    selectedModels.add(MODELS['Kimi K2'].name);
   }
 
-  // 3. Default to a fast, general-purpose free model for simple greetings or very short prompts
-  return MODELS['GLM 4.5 Air'].name;
+  // Always include a fast, general-purpose model for a quick fallback
+  selectedModels.add(MODELS['GLM 4.5 Air'].name);
+  selectedModels.add(MODELS['Mixtral 8x7B'].name);
+
+  return Array.from(selectedModels);
 }
 
 /**
@@ -247,6 +235,8 @@ async function saveMessage(
 
   return true;
 }
+
+// ... (Geocoding, Directions, Matrix, Isochrones, Elevation utility functions remain unchanged) ...
 
 /**
  * Utility function to call OpenRouteService Geocoding API.
@@ -460,6 +450,7 @@ async function getElevation(coordinates: LatLng[]): Promise<string | null> {
   }
 }
 
+// ... (getQuirraPersonalizedInstruction function remains unchanged) ...
 
 /**
  * Generates a dynamic system instruction for the LLM based on user's personality,
@@ -473,7 +464,8 @@ const getQuirraPersonalizedInstruction = (
   memoryContext: string = '', // General user memory/summaries
   dailyFocus: DailyFocus | null = null, // User's daily focus goal
   recentMoodLogs: MoodLog[] = [], // Recent mood entries
-  activeGoals: UserGoal[] = [] // Active goals
+  activeGoals: UserGoal[] = [], // Active goals
+  emotionalTrendSummary: string | null = null // Long-term emotional trend summary
 ) => {
   // Use default values if personalityProfile is null
   const learning_style = personality?.learning_style || 'standard';
@@ -649,6 +641,10 @@ const getQuirraPersonalizedInstruction = (
     instructions.push(`**Long-Term Memory:** Recall these key points from your past interactions with the user (Memory): ${memoryContext}`);
     instructions.push(`Leverage this memory to provide more coherent and contextually relevant responses without explicitly stating "from memory".`);
   }
+  
+  if (emotionalTrendSummary) {
+    instructions.push(`**Emotional Trend Summary:** The user's long-term emotional trend is: "${emotionalTrendSummary}". Use this to provide a more deeply empathetic and supportive response, especially if the trend is negative.`);
+  }
 
   if (dailyFocus) {
     instructions.push(`**Daily Focus:** The user's current daily focus is: "${dailyFocus.focus_text}". Keep this in mind and offer support relevant to this goal, gently guiding them towards achieving it.`);
@@ -683,64 +679,192 @@ const getQuirraPersonalizedInstruction = (
   return instructions.join("\n");
 };
 
+/**
+ * Evaluates and fuses responses from multiple models.
+ * This is a simple heuristic-based approach. A more advanced system might use a smaller LLM
+ * to evaluate and combine the responses, or a ranking algorithm.
+ * @param responses Array of { modelName, content, latency } objects.
+ * @param prompt The original user prompt.
+ * @param userAnalysisResult The NLP analysis of the prompt.
+ * @returns The best response string.
+ */
+function evaluateAndFuseResponses(
+  responses: Array<{ modelName: string; content: string; latency: number }>,
+  prompt: string,
+  userAnalysisResult: MessageAnalysis
+): string {
+  // Sort responses by a simple quality score (e.g., relevance, length, latency)
+  const sortedResponses = responses.sort((a, b) => {
+    // Simple relevance check: Does the response contain keywords from the prompt?
+    const aRelevance = userAnalysisResult.topic_keywords.filter(keyword => a.content.toLowerCase().includes(keyword.toLowerCase())).length;
+    const bRelevance = userAnalysisResult.topic_keywords.filter(keyword => b.content.toLowerCase().includes(keyword.toLowerCase())).length;
+
+    // Favor more relevant responses
+    if (aRelevance !== bRelevance) {
+      return bRelevance - aRelevance;
+    }
+
+    // Favor longer, more detailed responses for complex intents
+    if (userAnalysisResult.intent === 'complex_reasoning' || userAnalysisResult.intent === 'summarization') {
+      return b.content.length - a.content.length;
+    }
+    
+    // For quick tasks, favor faster responses
+    if (userAnalysisResult.intent === 'hello' || userAnalysisResult.intent === 'greeting') {
+      return a.latency - b.latency;
+    }
+
+    // Default to the fastest model
+    return a.latency - b.latency;
+  });
+
+  // Take the best response's content
+  const bestResponse = sortedResponses[0];
+  console.log(`✅ Selected best response from model: ${bestResponse.modelName} (Latency: ${bestResponse.latency.toFixed(2)}ms)`);
+  return bestResponse.content;
+}
+
+// Ensure body parser is disabled for this route to handle FormData
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export async function POST(req: Request) {
-  // Destructure request body, ensuring 'messages' and 'currentMessageId' are correctly handled
-  const { prompt, reset, userName, personalityProfile: clientPersonalityProfile, chatSessionId, messages, isRegenerating, currentMessageId } = await req.json();
+  // 1. Handle FormData in POST Request
+  const form = new IncomingForm();
+  
+  let fields: Fields;
+  let files: Files;
+  
+  try {
+    [fields, files] = await new Promise<[Fields, Files]>((resolve, reject) => {
+      form.parse(req as any, (err, flds, fls) => {
+        if (err) return reject(err);
+        resolve([flds, fls]);
+      });
+    });
+  } catch (err) {
+    console.error('❌ Error parsing FormData:', err);
+    return NextResponse.json({ content: '❌ Failed to process the request due to an issue with file upload.' }, { status: 400 });
+  }
+
+  let prompt: string | undefined = Array.isArray(fields.prompt) ? fields.prompt[0] : fields.prompt;
+  
+  // FIX: Handle the case where prompt is undefined
+  if (!prompt) {
+    return NextResponse.json({ content: '⚠️ Please enter a message to chat with Quirra.' }, { status: 400 });
+  }
+  
+  // Now TypeScript knows that `prompt` is a string here
+  const reset = Array.isArray(fields.reset) ? fields.reset[0] === 'true' : fields.reset === 'true';
+  const userName = Array.isArray(fields.userName) ? fields.userName[0] : fields.userName;
+  const clientPersonalityProfile = fields.personalityProfile ? JSON.parse(Array.isArray(fields.personalityProfile) ? fields.personalityProfile[0] : fields.personalityProfile) : null;
+  const chatSessionId = Array.isArray(fields.chatSessionId) ? fields.chatSessionId[0] : fields.chatSessionId;
+  const messages = fields.messages ? JSON.parse(Array.isArray(fields.messages) ? fields.messages[0] : fields.messages) : [];
+  const isRegenerating = Array.isArray(fields.isRegenerating) ? fields.isRegenerating[0] === 'true' : fields.isRegenerating === 'true';
+
+  let uploadedFileContent = '';
+
+  // 2. File Validation and 3. Read File Content
+  const file = files.file?.[0]; // Get the first file from the 'file' field
+  if (file) {
+    console.log(`📁 File uploaded: ${file.originalFilename}, Size: ${file.size} bytes`);
+    
+    // File Size Limit
+    if (file.size > MAX_FILE_SIZE) {
+      console.error(`❌ File too large: ${file.size} bytes. Max size is ${MAX_FILE_SIZE} bytes.`);
+      return NextResponse.json({ content: '❌ The uploaded file is too large. Please upload a file smaller than 10MB.' }, { status: 413 });
+    }
+
+    const fileExtension = path.extname(file.originalFilename || '').toLowerCase();
+    
+    try {
+      if (fileExtension === '.txt') {
+        const fileBuffer = await readFileAsync(file.filepath);
+        uploadedFileContent = fileBuffer.toString('utf8');
+      } else if (fileExtension === '.pdf') {
+        const fileBuffer = await readFileAsync(file.filepath);
+        const data = await pdf(fileBuffer);
+        uploadedFileContent = data.text;
+      } else if (fileExtension === '.docx') {
+        const data = await mammoth.extractRawText({ path: file.filepath });
+        uploadedFileContent = data.value;
+      } else {
+        console.warn(`⚠️ Unsupported file type: ${fileExtension}`);
+        return NextResponse.json({ content: '⚠️ Unsupported file type. Please upload a .txt, .pdf, or .docx file.' }, { status: 400 });
+      }
+      // 4. Combine File Content with User Prompt
+      prompt = `[File Content]\n${uploadedFileContent}\n\n[User Prompt]\n${prompt}`;
+      console.log('✅ File content successfully extracted and combined with prompt.');
+    } catch (err) {
+      // 6. Handle File Parsing Failures
+      console.error('❌ Error parsing file:', err);
+      return NextResponse.json({ content: '❌ Failed to process the uploaded file. Please ensure it is not corrupted and try again.' }, { status: 500 });
+    } finally {
+      // Clean up the temporary file
+      try {
+        await fs.promises.unlink(file.filepath);
+        console.log(`🗑️ Temporary file deleted: ${file.filepath}`);
+      } catch (cleanupErr) {
+        console.error(`⚠️ Failed to delete temporary file: ${file.filepath}`, cleanupErr);
+      }
+    }
+  }
+  
+  // 7. Data Security & Privacy Considerations (Commented reminder)
+  /*
+    * This is a reminder for a production environment.
+    * For a real-world application, consider these points:
+    * - Secure File Storage: If temporary files must be stored, use a secure, private bucket (e.g., S3).
+    * - Data Deletion Policy: Implement a cron job or webhook to delete processed files shortly after use.
+    * - User Control: Provide a UI for users to manage their uploaded files and long-term memory.
+  */
+
   const supabase = createRouteHandlerClient({ cookies });
 
   // Environment variable access for API keys
   const serperKey = process.env.SERPER_API_KEY;
   const orsApiKey = process.env.OPENROUTESERVICE_API_KEY;
-  const witAiAccessToken = process.env.WIT_AI_SERVER_ACCESS_TOKEN; // New: Wit.ai access token
-
-  // Supabase public keys (typically used client-side, but good to acknowledge their presence)
+  const witAiAccessToken = process.env.WIT_AI_SERVER_ACCESS_TOKEN;
   const nextPublicSupabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const nextPublicSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-  // Crucial check for OpenRouter API key
   if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === 'YOUR_OPENROUTER_API_KEY_HERE') {
     console.error('❌ Server Error: OPENROUTER_API_KEY is not set. Cannot perform core AI functions.');
     return NextResponse.json({ content: '❌ Server configuration error: OpenRouter API key is missing. This is essential for core AI functions.' }, { status: 500 });
   }
 
-  // Warning for missing Serper API key (search will be unavailable)
   if (!serperKey) {
     console.warn('⚠️ Server Warning: SERPER_API_KEY is not set. Live search functionality will be unavailable.');
   }
 
-  // Warning for missing ORS API key (geospatial functions will be unavailable)
   if (!orsApiKey) {
     console.warn('⚠️ Server Warning: OPENROUTESERVICE_API_KEY is not set. Geospatial functionality will be unavailable.');
   }
 
-  // Warning for missing Wit.ai API key (if used for advanced NLP analysis)
   if (!witAiAccessToken) {
-    console.warn('⚠️ Server Warning: WIT_AI_SERVER_ACCESS_TOKEN is not set. Advanced NLP features (if implemented) might be limited.');
+    console.warn('⚠️ Server Warning: WIT_AI_SERVER_ACCESS_TOKEN is not set. Advanced NLP features might be limited.');
   }
 
-  // Acknowledge Supabase public keys
   if (!nextPublicSupabaseAnonKey || !nextPublicSupabaseUrl) {
     console.warn('⚠️ Server Warning: NEXT_PUBLIC_SUPABASE_ANON_KEY or NEXT_PUBLIC_SUPABASE_URL not fully set. Ensure client-side Supabase configuration is correct.');
   } else {
     console.log(`✅ Supabase URL: ${nextPublicSupabaseUrl}`);
   }
 
-
-  // Validate chat session ID
   if (!chatSessionId) {
     console.error('❌ Client Error: chatSessionId is missing from the request.');
     return NextResponse.json({ content: '❌ Chat session ID is missing. Please restart your chat.' }, { status: 400 });
   }
 
   try {
-    // Authenticate user
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-
     if (authError || !user) {
       console.error('❌ Authentication Error:', authError?.message || 'User not found.');
       return NextResponse.json({ content: '❌ You must log in to use Quirra. Please sign in.' }, { status: 401 });
     }
-
     const userId = user.id;
 
     // --- Token Limit Check and Update ---
@@ -759,10 +883,8 @@ export async function POST(req: Request) {
     const lastUsageDate = userProfile?.last_usage_date;
     const today = new Date().toISOString().split('T')[0];
 
-    // Reset daily usage if it's a new day
     if (!lastUsageDate || lastUsageDate !== today) {
       currentDailyTokenUsage = 0;
-      // Update Supabase immediately to reflect new day's usage
       const { error: resetError } = await supabase
         .from('profiles')
         .update({ daily_token_usage: 0, last_usage_date: today })
@@ -772,34 +894,18 @@ export async function POST(req: Request) {
       }
     }
 
-    // Estimate tokens for the current prompt (very rough estimate, actual will come from API)
-    // A common rule of thumb is 1 word = ~1.3 tokens, or 4 characters = 1 token
-    const estimatedInputTokens = Math.ceil(prompt.length / 4); // Characters to tokens
-
+    const estimatedInputTokens = Math.ceil(prompt.length / 4);
     if (currentDailyTokenUsage + estimatedInputTokens > DAILY_TOKEN_LIMIT) {
       return NextResponse.json({ content: `🚫 You have exceeded your daily token limit of ${DAILY_TOKEN_LIMIT} tokens. Please try again tomorrow.` }, { status: 429 });
     }
     // --- End Token Limit Check ---
 
-
-    // Handle conversation reset request
     if (reset === true) {
       console.log(`Initiating conversation reset for user: ${userId}, session: ${chatSessionId}`);
-      const { error: deleteMessagesError } = await supabase
-        .from('messages') // Consistent table name
-        .delete()
-        .eq('user_id', userId)
-        .eq('chat_session_id', chatSessionId);
-
-      const { error: deleteMemoryError } = await supabase
-        .from('memory') // Consistent table name
-        .delete()
-        .eq('user_id', userId)
-        .eq('chat_session_id', chatSessionId);
-
-      // Reset last_proactive_checkin_at and daily_token_usage in user profile
+      const { error: deleteMessagesError } = await supabase.from('messages').delete().eq('user_id', userId).eq('chat_session_id', chatSessionId);
+      const { error: deleteMemoryError } = await supabase.from('memory').delete().eq('user_id', userId).eq('chat_session_id', chatSessionId);
       const { data: profileUpdateData, error: updateProfileError } = await supabase
-        .from('profiles') // Consistent table name
+        .from('profiles')
         .update({ last_proactive_checkin_at: null, daily_token_usage: 0, last_usage_date: today })
         .eq('id', userId);
 
@@ -812,39 +918,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ content: '🧠 Conversation reset. Let\'s begin again.' });
     }
 
-    // Validate prompt presence
-    if (!prompt) {
-      return NextResponse.json({ content: '⚠️ Please enter a message to chat with Quirra.' }, { status: 400 });
-    }
-
-    // Analyze the user's current message tone and intent using an external utility (potentially using Wit.ai or other NLP)
+    // 1. Receive User Input & 2. Intent Classification + Confidence Scoring
     console.log('🧠 Analyzing user message...');
-    const userAnalysisResult: MessageAnalysis = await analyzeMessage(prompt); // This utility might use Wit.ai internally
+    const userAnalysisResult: MessageAnalysis & { confidence?: number } = await analyzeMessage(prompt);
     console.log('✅ User message analysis complete:', userAnalysisResult);
 
-    // Fetch recent chat history for context
-    const { data: historyData, error: fetchHistoryError } = await supabase
-      .from('messages') // Consistent table name
-      .select('role, content')
-      .eq('user_id', userId)
-      .eq('chat_session_id', chatSessionId)
-      .order('created_at', { ascending: true })
-      .limit(12); // Limit history to recent messages for LLM context
-
-    if (fetchHistoryError) {
-      console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
-      // Continue without history if error, don't block
+    if (userAnalysisResult.confidence && userAnalysisResult.confidence < 0.7) {
+      return NextResponse.json({ content: "I'm not quite sure I understand. Could you please clarify what you mean? For example, are you asking for information, a solution, or something else?" }, { status: 200 });
     }
 
-    // Fetch general user memory (e.g., emotional trend summaries) across all sessions
+
+    const { data: historyData, error: fetchHistoryError } = await supabase.from('messages').select('role, content').eq('user_id', userId).eq('chat_session_id', chatSessionId).order('created_at', { ascending: true }).limit(12);
+    if (fetchHistoryError) {
+      console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
+    }
+
     let memoryContext = '';
-    let emotionalTrendSummary: string | null = null; // Store the emotional trend summary separately
-    const { data: generalMemoryData, error: fetchGeneralMemoryError } = await supabase
-      .from('memory') // Consistent table name
-      .select('content, key') // Select key to identify emotional trend summary (using 'content' as per your schema)
-      .eq('user_id', userId)
-      .order('timestamp', { ascending: false })
-      .limit(5); // Get most recent general memory entries
+    let emotionalTrendSummary: string | null = null;
+    const { data: generalMemoryData, error: fetchGeneralMemoryError } = await supabase.from('memory').select('content, key').eq('user_id', userId).order('timestamp', { ascending: false }).limit(5);
 
     if (fetchGeneralMemoryError) {
       console.error('❌ Supabase Error: Failed to fetch general user memory:', fetchGeneralMemoryError.message);
@@ -856,31 +947,16 @@ export async function POST(req: Request) {
       }
     }
 
-    // Fetch Daily Focus, Mood Logs, and Active Goals for personalized instruction
     let dailyFocus: DailyFocus | null = null;
-    // `today` variable is already defined above
-
-    const { data: focusData, error: fetchFocusError } = await supabase
-      .from('daily_focus') // Consistent table name
-      .select('focus_text, created_at')
-      .eq('user_id', userId)
-      .eq('date', today)
-      .single();
-
-    if (fetchFocusError && fetchFocusError.code !== 'PGRST116') { // PGRST116 means no rows found, which is not an error
+    const { data: focusData, error: fetchFocusError } = await supabase.from('daily_focus').select('focus_text, created_at').eq('user_id', userId).eq('date', today).single();
+    if (fetchFocusError && fetchFocusError.code !== 'PGRST116') {
       console.error('❌ Supabase Error: Failed to fetch daily focus:', fetchFocusError.message);
     } else if (focusData) {
       dailyFocus = focusData;
     }
 
     let recentMoodLogs: MoodLog[] = [];
-    const { data: moodLogsData, error: fetchMoodLogsError } = await supabase
-      .from('mood_logs') // Consistent table name
-      .select('mood_label, sentiment_score, timestamp')
-      .eq('user_id', userId)
-      .order('timestamp', { ascending: false })
-      .limit(3); // Get the 3 most recent mood logs
-
+    const { data: moodLogsData, error: fetchMoodLogsError } = await supabase.from('mood_logs').select('mood_label, sentiment_score, timestamp').eq('user_id', userId).order('timestamp', { ascending: false }).limit(3);
     if (fetchMoodLogsError) {
       console.error('❌ Supabase Error: Failed to fetch mood logs:', fetchMoodLogsError.message);
     } else if (moodLogsData) {
@@ -888,27 +964,16 @@ export async function POST(req: Request) {
     }
 
     let activeGoals: UserGoal[] = [];
-    const { data: goalsData, error: fetchGoalsError } = await supabase
-      .from('user_goals') // Consistent table name
-      .select('*')
-      .eq('user_id', userId)
-      .eq('status', 'active') // Only fetch active goals
-      .order('created_at', { ascending: true });
-
+    const { data: goalsData, error: fetchGoalsError } = await supabase.from('user_goals').select('*').eq('user_id', userId).eq('status', 'active').order('created_at', { ascending: true });
     if (fetchGoalsError) {
       console.error('❌ Supabase Error: Failed to fetch active goals:', fetchGoalsError.message);
     } else if (goalsData) {
       activeGoals = goalsData as UserGoal[];
     }
 
-    // Fetch personality profile (if not already passed from client or if needed for more fields)
-    let userPersonalityProfile: PersonalityProfile | null = clientPersonalityProfile; // Use passed profile first
+    let userPersonalityProfile: PersonalityProfile | null = clientPersonalityProfile;
     if (!userPersonalityProfile) {
-        const { data: profileData, error: fetchProfileError } = await supabase
-            .from('profiles') // Consistent table name
-            .select('personality_profile')
-            .eq('id', userId)
-            .single();
+        const { data: profileData, error: fetchProfileError } = await supabase.from('profiles').select('personality_profile').eq('id', userId).single();
         if (fetchProfileError && fetchProfileError.code !== 'PGRST116') {
             console.error('❌ Supabase Error: Failed to fetch user personality profile:', fetchProfileError.message);
         } else if (profileData?.personality_profile) {
@@ -916,36 +981,24 @@ export async function POST(req: Request) {
         }
     }
 
-
-    // Proactive Check-in Logic: Generate message and send as a separate initial stream chunk
+    const { data: currentProfileData, error: fetchCurrentProfileError } = await supabase.from('profiles').select('last_proactive_checkin_at').eq('id', userId).single();
     let initialProactiveMessage: string | null = null;
-    // Re-fetch profile data for last_proactive_checkin_at to ensure it's up-to-date
-    const { data: currentProfileData, error: fetchCurrentProfileError } = await supabase
-      .from('profiles') // Consistent table name
-      .select('last_proactive_checkin_at')
-      .eq('id', userId)
-      .single();
-
-    if (currentProfileData === null || (fetchCurrentProfileError && (fetchCurrentProfileError as any).code !== 'PGRST116')) {
-      console.error('❌ Supabase Error: Failed to fetch profile for proactive check-in:', fetchCurrentProfileError?.message || 'No profile data.');
-    } else {
+    if (currentProfileData !== null && !fetchCurrentProfileError) {
       const lastCheckinAt = currentProfileData?.last_proactive_checkin_at ? new Date(currentProfileData.last_proactive_checkin_at) : null;
       const now = new Date();
       const hoursSinceLastCheckin = lastCheckinAt ? (now.getTime() - lastCheckinAt.getTime()) / (1000 * 60 * 60) : Infinity;
 
-      // Trigger proactive check-in if interval passed AND there's a recent emotional trend summary
       if (hoursSinceLastCheckin >= PROACTIVE_CHECKIN_INTERVAL_HOURS && emotionalTrendSummary) {
         console.log(`🧠 Proactive check-in due for user ${userId}. Generating message...`);
         try {
-          // Use OpenRouter for the proactive message generation, defaulting to a free model
-          const proactiveModel = MODELS['GLM 4.5 Air'].name; // Use a fast, free model for proactive messages
+          const proactiveModel = MODELS['GLM 4.5 Air'].name;
           const proactiveRes = await fetch(OPENROUTER_API_URL, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-              'HTTP-Referer': 'YOUR_SITE_URL_HERE', // Replace with your actual site URL
-              'X-Title': 'Your Chatbot Prototype', // Replace with your app title
+              'HTTP-Referer': 'YOUR_SITE_URL_HERE',
+              'X-Title': 'Your Chatbot Prototype',
             },
             body: JSON.stringify({
               model: proactiveModel,
@@ -964,92 +1017,68 @@ export async function POST(req: Request) {
                   content: `Based on this emotional trend summary: "${emotionalTrendSummary}", generate a proactive check-in message for the user.`
                 }
               ],
-              temperature: 0.7, // Slightly creative but focused
-              max_tokens: 60, // Keep it very concise
+              temperature: 0.7,
+              max_tokens: 60,
             }),
-            signal: AbortSignal.timeout(5000) // 5 second timeout for proactive message
+            signal: AbortSignal.timeout(5000)
           });
-
-          if (!proactiveRes.ok) {
-            const errorText = await proactiveRes.text();
-            throw new Error(`OpenRouter Proactive API Error: ${proactiveRes.status} - ${errorText}`);
-          }
-
-          const proactiveData = await proactiveRes.json();
-          initialProactiveMessage = proactiveData.choices?.[0]?.message?.content?.trim() || null;
-
-          if (initialProactiveMessage) {
-            console.log(`✅ Generated proactive message: "${initialProactiveMessage}"`);
-            // Update the last check-in timestamp in the user's profile
-            const { error: updateCheckinError } = await supabase
-              .from('profiles') // Consistent table name
-              .update({ last_proactive_checkin_at: now.toISOString() })
-              .eq('id', userId);
-
-            if (updateCheckinError) {
-              console.error('❌ Supabase Error: Failed to update last_proactive_checkin_at:', updateCheckinError.message);
+          if (proactiveRes.ok) {
+            const proactiveData = await proactiveRes.json();
+            initialProactiveMessage = proactiveData.choices?.[0]?.message?.content?.trim() || null;
+            if (initialProactiveMessage) {
+              console.log(`✅ Generated proactive message: "${initialProactiveMessage}"`);
+              const { error: updateCheckinError } = await supabase
+                .from('profiles')
+                .update({ last_proactive_checkin_at: now.toISOString() })
+                .eq('id', userId);
+              if (updateCheckinError) {
+                console.error('❌ Supabase Error: Failed to update last_proactive_checkin_at:', updateCheckinError.message);
+              }
             }
+          } else {
+            console.error('❌ Error generating proactive message:', await proactiveRes.text());
           }
         } catch (proactiveError: any) {
           console.error('❌ Error generating proactive message:', proactiveError.message);
-          initialProactiveMessage = null; // Ensure it's null if generation fails
         }
       }
     }
 
-    // Construct messages array for the LLM, including the dynamic system instruction
-    // Ensure 'messages' from the client is correctly mapped for conversation history
     const conversationHistoryForLLM: ChatMessage[] = messages.map((msg: any) => ({
         role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
         content: msg.content,
     }));
 
-    // If regenerating, we need to ensure the last assistant message (which is being regenerated)
-    // is not included in the history for the new generation, as it will be replaced.
     if (isRegenerating && conversationHistoryForLLM[conversationHistoryForLLM.length - 1]?.role === 'assistant') {
         conversationHistoryForLLM.pop();
     }
 
-    const messagesForLLM = [
-      {
-        role: 'system' as const,
-        content: getQuirraPersonalizedInstruction(
-          userPersonalityProfile, // Use the fetched/passed personality profile
-          userAnalysisResult, // Pass the analysis result here
-          userName,
-          memoryContext,
-          dailyFocus,
-          recentMoodLogs,
-          activeGoals
-        )
-      },
-      ...conversationHistoryForLLM, // Use the prepared conversation history
-      { role: 'user' as const, content: prompt }, // Add the current user prompt
+    const systemInstruction = getQuirraPersonalizedInstruction(
+        userPersonalityProfile,
+        userAnalysisResult,
+        userName,
+        memoryContext,
+        dailyFocus,
+        recentMoodLogs,
+        activeGoals,
+        emotionalTrendSummary
+    );
+    
+    // 5. Send Combined Prompt to the LLM Model
+    let messagesForLLM = [
+      { role: 'system' as const, content: systemInstruction },
+      ...conversationHistoryForLLM,
+      { role: 'user' as const, content: prompt },
     ];
 
-    // Save the user's message to the database, including the full analysis result
-    const messageSavedSuccessfully = await saveMessage(
-      supabase,
-      userId,
-      chatSessionId,
-      'user',
-      prompt,
-      userAnalysisResult // Pass the full analysis result
-    );
-
-    // Trigger emotional trend summarization asynchronously
+    // Log the user message and perform post-save actions
+    const messageSavedSuccessfully = await saveMessage(supabase, userId, chatSessionId, 'user', prompt, userAnalysisResult);
     if (messageSavedSuccessfully) {
-        const { count, error: countError } = await supabase
-            .from('messages') // Consistent table name
-            .select('*', { count: 'exact', head: true })
-            .eq('user_id', userId)
-            .eq('chat_session_id', chatSessionId);
-
+        const { count, error: countError } = await supabase.from('messages').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('chat_session_id', chatSessionId);
         if (countError) {
             console.error('❌ Supabase Error: Failed to get message count for summarization trigger:', countError.message);
         } else if (count !== null && count % MESSAGE_COUNT_FOR_EMOTIONAL_SUMMARY === 0) {
             console.log(`🧠 Triggering emotional trend summarization for user ${userId} in session ${chatSessionId} (message count: ${count})...`);
-            // Run summarization asynchronously without awaiting, to not block response
             Promise.resolve(summarizeEmotionalTrends(supabase, userId, chatSessionId))
                 .then(summary => {
                     if (summary) {
@@ -1064,377 +1093,248 @@ export async function POST(req: Request) {
         }
     }
 
-    // --- Dynamic API Call Orchestration based on userAnalysisResult ---
-    // Prioritize ORS calls if location/navigation intent is detected
+    // --- Autonomous Tool Usage & Routing ---
+    // (This section is now placed right before the LLM call to inform the LLM of tool results)
     if (orsApiKey) {
       if (userAnalysisResult.intent === 'geocoding' && userAnalysisResult.location_query) {
-        console.log(`🌍 Performing geocoding for: ${userAnalysisResult.location_query}`);
         const coords = await geocodeAddress(userAnalysisResult.location_query);
         if (coords) {
-          messagesForLLM.push({
-            role: 'system' as const,
-            content: `(Internal Note: Geocoding result for "${userAnalysisResult.location_query}": Lat ${coords.lat.toFixed(4)}, Lng ${coords.lng.toFixed(4)}. Integrate this into your response.)`
-          });
+          const toolResult = `(Internal Note: Geocoding result for "${userAnalysisResult.location_query}": Lat ${coords.lat.toFixed(4)}, Lng ${coords.lng.toFixed(4)}. Integrate this into your response.)`;
+          messagesForLLM.push({ role: 'system' as const, content: toolResult });
+          console.log(`⚙️ Tool Used: Geocoding`);
         } else {
-          messagesForLLM.push({
-            role: 'system' as const,
-            content: `(Internal Note: Geocoding failed for "${userAnalysisResult.location_query}". Attempt to answer based on general knowledge.)`
-          });
+          const toolResult = `(Internal Note: Geocoding failed for "${userAnalysisResult.location_query}". Attempt to answer based on general knowledge.)`;
+          messagesForLLM.push({ role: 'system' as const, content: toolResult });
+          console.log(`⚙️ Tool Failed: Geocoding`);
         }
       } else if (userAnalysisResult.intent === 'directions' && userAnalysisResult.start_location && userAnalysisResult.end_location) {
-        console.log(`🗺️ Getting directions from ${userAnalysisResult.start_location} to ${userAnalysisResult.end_location}`);
         const startCoords = await geocodeAddress(userAnalysisResult.start_location);
         const endCoords = await geocodeAddress(userAnalysisResult.end_location);
         if (startCoords && endCoords) {
           const directions = await getDirections(startCoords, endCoords, userAnalysisResult.travel_mode || 'driving-car');
           if (directions) {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Directions from "${userAnalysisResult.start_location}" to "${userAnalysisResult.end_location}":\n${directions}\nIntegrate this into your response.)`
-            });
+            const toolResult = `(Internal Note: Directions from "${userAnalysisResult.start_location}" to "${userAnalysisResult.end_location}":\n${directions}\nIntegrate this into your response.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Used: Directions`);
           } else {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Failed to get directions from "${userAnalysisResult.start_location}" to "${userAnalysisResult.end_location}". Attempt to answer based on general knowledge.)`
-            });
+            const toolResult = `(Internal Note: Failed to get directions. Attempt to answer based on general knowledge.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Failed: Directions`);
           }
         } else {
-          messagesForLLM.push({
-            role: 'system' as const,
-            content: `(Internal Note: Could not geocode one or both locations for directions. Attempt to answer based on general knowledge.)`
-          });
+          const toolResult = `(Internal Note: Could not geocode one or both locations for directions. Attempt to answer based on general knowledge.)`;
+          messagesForLLM.push({ role: 'system' as const, content: toolResult });
+          console.log(`⚙️ Tool Failed: Directions (Geocoding issue)`);
         }
       } else if (userAnalysisResult.intent === 'matrix' && userAnalysisResult.locations_for_matrix && userAnalysisResult.locations_for_matrix.length > 1) {
-        console.log(`📊 Getting travel matrix for ${userAnalysisResult.locations_for_matrix.join(', ')}`);
         const geocodedLocations: LatLng[] = [];
-        for (const loc of userAnalysisResult.locations_for_matrix) {
-          const coords = await geocodeAddress(loc);
-          if (coords) geocodedLocations.push(coords);
-        }
+        for (const loc of userAnalysisResult.locations_for_matrix) { const coords = await geocodeAddress(loc); if (coords) geocodedLocations.push(coords); }
         if (geocodedLocations.length === userAnalysisResult.locations_for_matrix.length) {
           const matrix = await getMatrix(geocodedLocations, userAnalysisResult.travel_mode || 'driving-car');
           if (matrix) {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Travel Matrix for provided locations:\n${matrix}\nIntegrate this into your response.)`
-            });
+            const toolResult = `(Internal Note: Travel Matrix for provided locations:\n${matrix}\nIntegrate this into your response.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Used: Matrix`);
           } else {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Failed to get travel matrix. Attempt to answer based on general knowledge.)`
-            });
+            const toolResult = `(Internal Note: Failed to get travel matrix. Attempt to answer based on general knowledge.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Failed: Matrix`);
           }
         } else {
-          messagesForLLM.push({
-            role: 'system' as const,
-            content: `(Internal Note: Could not geocode all locations for travel matrix. Attempt to answer based on general knowledge.)`
-          });
+          const toolResult = `(Internal Note: Could not geocode all locations for travel matrix. Attempt to answer based on general knowledge.)`;
+          messagesForLLM.push({ role: 'system' as const, content: toolResult });
+          console.log(`⚙️ Tool Failed: Matrix (Geocoding issue)`);
         }
       } else if (userAnalysisResult.intent === 'isochrones' && userAnalysisResult.center_location && userAnalysisResult.range_values && userAnalysisResult.range_values.length > 0) {
-        console.log(`⏳ Getting isochrones for ${userAnalysisResult.center_location}`);
         const centerCoords = await geocodeAddress(userAnalysisResult.center_location);
         if (centerCoords) {
           const isochrone = await getIsochrones(centerCoords, userAnalysisResult.range_values, userAnalysisResult.travel_mode || 'driving-car', userAnalysisResult.range_type || 'time');
           if (isochrone) {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Isochrone data for "${userAnalysisResult.center_location}":\n${isochrone}\nIntegrate this into your response.)`
-            });
+            const toolResult = `(Internal Note: Isochrone data for "${userAnalysisResult.center_location}":\n${isochrone}\nIntegrate this into your response.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Used: Isochrones`);
           } else {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Failed to get isochrone data. Attempt to answer based on general knowledge.)`
-            });
+            const toolResult = `(Internal Note: Failed to get isochrone data. Attempt to answer based on general knowledge.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Failed: Isochrones`);
           }
         } else {
-          messagesForLLM.push({
-            role: 'system' as const,
-            content: `(Internal Note: Could not geocode center location for isochrones. Attempt to answer based on general knowledge.)`
-          });
+          const toolResult = `(Internal Note: Could not geocode center location for isochrones. Attempt to answer based on general knowledge.)`;
+          messagesForLLM.push({ role: 'system' as const, content: toolResult });
+          console.log(`⚙️ Tool Failed: Isochrones (Geocoding issue)`);
         }
       } else if (userAnalysisResult.intent === 'elevation' && userAnalysisResult.locations_for_elevation && userAnalysisResult.locations_for_elevation.length > 0) {
-        console.log(`⛰️ Getting elevation for ${userAnalysisResult.locations_for_elevation.join(', ')}`);
         const geocodedLocations: LatLng[] = [];
-        for (const loc of userAnalysisResult.locations_for_elevation) {
-          const coords = await geocodeAddress(loc);
-          if (coords) geocodedLocations.push(coords);
-        }
+        for (const loc of userAnalysisResult.locations_for_elevation) { const coords = await geocodeAddress(loc); if (coords) geocodedLocations.push(coords); }
         if (geocodedLocations.length === userAnalysisResult.locations_for_elevation.length) {
           const elevation = await getElevation(geocodedLocations);
           if (elevation) {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Elevation data for provided locations:\n${elevation}\nIntegrate this into your response.)`
-            });
+            const toolResult = `(Internal Note: Elevation data for provided locations:\n${elevation}\nIntegrate this into your response.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Used: Elevation`);
           } else {
-            messagesForLLM.push({
-              role: 'system' as const,
-              content: `(Internal Note: Failed to get elevation data. Attempt to answer based on general knowledge.)`
-            });
+            const toolResult = `(Internal Note: Failed to get elevation data. Attempt to answer based on general knowledge.)`;
+            messagesForLLM.push({ role: 'system' as const, content: toolResult });
+            console.log(`⚙️ Tool Failed: Elevation`);
           }
         } else {
-          messagesForLLM.push({
-            role: 'system' as const,
-            content: `(Internal Note: Could not geocode all locations for elevation. Attempt to answer based on general knowledge.)`
-          });
+          const toolResult = `(Internal Note: Could not geocode all locations for elevation. Attempt to answer based on general knowledge.)`;
+          messagesForLLM.push({ role: 'system' as const, content: toolResult });
+          console.log(`⚙️ Tool Failed: Elevation (Geocoding issue)`);
         }
       }
     }
 
-
-    // Perform live search if needed and Serper API key is available
-    const needsLiveSearch = serperKey && (
-      userAnalysisResult.intent === 'information_seeking' ||
-      userAnalysisResult.intent === 'question' ||
-      userAnalysisResult.topic_keywords.some((keyword: string) =>
-        ["news", "current", "latest", "update", "weather", "define", "how to", "what is"].includes(keyword.toLowerCase())
-      ) ||
-      prompt.toLowerCase().includes('search') // Also include direct "search" command
-    );
+    // 4. Invoke SERPER API for Live Web Search (If Needed)
+    const needsLiveSearch = serperKey && (userAnalysisResult.intent === 'information_seeking' || userAnalysisResult.intent === 'question' || userAnalysisResult.topic_keywords.some((keyword: string) => ["news", "current", "latest", "update", "weather", "define", "how to", "what is"].includes(keyword.toLowerCase())) || prompt.toLowerCase().includes('search'));
 
     if (needsLiveSearch && serperKey) {
       console.log('🔍 Performing live search with Serper for prompt:', prompt);
       try {
         const searchRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-KEY': serperKey,
-          },
+          headers: { 'Content-Type': 'application/json', 'X-API-KEY': serperKey },
           body: JSON.stringify({ q: prompt }),
-          signal: AbortSignal.timeout(10000) // 10 second timeout for search
+          signal: AbortSignal.timeout(10000)
         });
-
-        if (!searchRes.ok) {
-          const errorText = await searchRes.text();
-          console.error(`❌ Serper API Error: ${searchRes.status} - ${errorText}`);
-          messagesForLLM.push({ // Push to LLM context
-            role: 'system' as const,
-            content: `(Internal Note: Serper search for "${prompt}" failed with error: ${errorText}. Attempt to answer based on general knowledge and context.)`
-          });
-        } else {
+        if (searchRes.ok) {
           const searchData = await searchRes.json();
           type SearchResult = { title: string; snippet: string; link: string };
-          const results = (searchData?.organic as SearchResult[] | undefined)?.filter(
-            (r) => r.title && r.snippet && r.link
-          );
-
+          const results = (searchData?.organic as SearchResult[] | undefined)?.filter((r) => r.title && r.snippet && r.link);
           if (results?.length) {
-            const topSummaries = results.slice(0, 3).map( // Take top 3 results
-              (r) => `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`
-            ).join('\n\n');
-
-            messagesForLLM.push({ // Push to LLM context
-              role: 'system' as const,
-              content: `(Internal Note: Live search results for "${prompt}":\n\n${topSummaries}\n\nIntegrate this information into your response naturally.)`
-            });
+            const topSummaries = results.slice(0, 3).map((r) => `🔹 **${r.title}**\n${r.snippet}\n🔗 ${r.link}`).join('\n\n');
+            messagesForLLM.push({ role: 'system' as const, content: `(Internal Note: Live search results for "${prompt}":\n\n${topSummaries}\n\nIntegrate this information into your response naturally.)` });
             console.log('✅ Serper search results added to LLM context.');
+            console.log(`⚙️ Tool Used: Serper Web Search`);
           } else {
             console.warn('⚠️ Serper returned no useful results for the query. LLM will use general knowledge.');
-            messagesForLLM.push({ // Push to LLM context
-              role: 'system' as const,
-              content: `(Internal Note: Serper search returned no useful results for "${prompt}". Answer based on general knowledge and context.)`
-            });
+            messagesForLLM.push({ role: 'system' as const, content: `(Internal Note: Serper search returned no useful results for "${prompt}". Answer based on general knowledge and context.)` });
+            console.log(`⚙️ Tool Failed: Serper Web Search (No results)`);
           }
+        } else {
+          console.error(`❌ Serper API Error: ${searchRes.status} - ${await searchRes.text()}`);
+          messagesForLLM.push({ role: 'system' as const, content: `(Internal Note: Serper search for "${prompt}" failed. Attempt to answer based on general knowledge and context.)` });
+          console.log(`⚙️ Tool Failed: Serper Web Search (API Error)`);
         }
       } catch (searchError: any) {
         console.error('❌ Error during Serper search:', searchError.message);
-        messagesForLLM.push({ // Push to LLM context
-          role: 'system' as const,
-          content: `(Internal Note: Error during Serper search for "${prompt}": ${searchError.message}. Answer based on general knowledge and context.)`
-        });
+        messagesForLLM.push({ role: 'system' as const, content: `(Internal Note: Error during Serper search for "${prompt}". Answer based on general knowledge and context.)` });
+        console.log(`⚙️ Tool Failed: Serper Web Search (Runtime Error)`);
       }
     } else if (needsLiveSearch && !serperKey) {
       console.warn('⚠️ Serper API key is not set. Cannot perform live search. LLM will use general knowledge.');
-      messagesForLLM.push({ // Push to LLM context
-        role: 'system' as const,
-        content: `(Internal Note: Serper API key is missing. Live search is unavailable. Answer based on general knowledge and context.)`
-      });
+      messagesForLLM.push({ role: 'system' as const, content: `(Internal Note: Serper API key is missing. Live search is unavailable. Answer based on general knowledge and context.)` });
     }
 
-    // Summarize chat history periodically for long-term memory
-    const MIN_MESSAGES_FOR_SUMMARY = 5; // Minimum messages to trigger summarization
-    const MAX_HISTORY_FOR_SUMMARY = 10; // Max messages to send for summarization
-
+    const MIN_MESSAGES_FOR_SUMMARY = 5;
+    const MAX_HISTORY_FOR_SUMMARY = 10;
     if (historyData && historyData.length >= MIN_MESSAGES_FOR_SUMMARY) {
-      const messagesToSummarize = historyData.slice(-MAX_HISTORY_FOR_SUMMARY); // Get the last N messages
-
+      const messagesToSummarize = historyData.slice(-MAX_HISTORY_FOR_SUMMARY);
       if (messagesToSummarize.length > 0) {
         console.log(`🧠 Triggering summarization for ${messagesToSummarize.length} messages in session ${chatSessionId}...`);
         const summarizeApiUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/summarize` : 'http://localhost:3000/api/summarize';
-
-        fetch(summarizeApiUrl, { // Use full URL for internal API call
+        fetch(summarizeApiUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            chatSessionId: chatSessionId,
-            messagesToSummarize: messagesToSummarize.map((msg: any) => ({
-              role: msg.role,
-              content: msg.content,
-            })),
-          }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chatSessionId: chatSessionId, messagesToSummarize: messagesToSummarize.map((msg: any) => ({ role: msg.role, content: msg.content })) }),
         }).then(response => {
-          if (!response.ok) {
-            response.json().then(err => console.error('❌ Summarization API Error:', err.message));
-          } else {
-            console.log('✅ Summarization API call initiated successfully.');
-          }
-        }).catch(err => {
-          console.error('❌ Error calling summarization API:', err);
-        });
+          if (!response.ok) { response.json().then(err => console.error('❌ Summarization API Error:', err.message)); }
+          else { console.log('✅ Summarization API call initiated successfully.'); }
+        }).catch(err => { console.error('❌ Error calling summarization API:', err); });
       }
     }
 
-    // --- Select the LLM model for the main response ---
-    const selectedModelForMainResponse = selectModel(prompt, userAnalysisResult, needsLiveSearch);
-    console.log(`🤖 Calling OpenRouter LLM for streaming main response using model: ${selectedModelForMainResponse}`);
+    // --- 3. Dispatch to All LLM Models (Parallel Model Querying) ---
+    const modelsToQuery = getRelevantModels(prompt);
+    console.log(`🤖 Dispatching prompt to models: ${modelsToQuery.join(', ')}`);
+
+    const modelPromises = modelsToQuery.map(modelName => {
+      const startTime = performance.now();
+      return fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'YOUR_SITE_URL_HERE',
+          'X-Title': 'Your Chatbot Prototype',
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: messagesForLLM,
+          max_tokens: 800,
+          temperature: 0.7,
+        }),
+        signal: AbortSignal.timeout(40000) // Timeout for each model call
+      })
+      .then(res => {
+        const latency = performance.now() - startTime;
+        if (!res.ok) {
+          return res.text().then(errorText => {
+            console.error(`❌ LLM API Error for model ${modelName}: ${res.status} - ${errorText}`);
+            return null; // Return null for failed requests
+          });
+        }
+        return res.json().then(data => {
+          return {
+            modelName,
+            content: data.choices?.[0]?.message?.content?.trim() || '',
+            latency,
+            usage: data.usage
+          };
+        });
+      })
+      .catch(err => {
+        console.error(`❌ Fetch Error for model ${modelName}:`, err.message);
+        return null;
+      });
+    });
+
+    // Await all model responses
+    const responses = (await Promise.all(modelPromises)).filter(Boolean) as Array<{ modelName: string; content: string; latency: number; usage: any }>;
+
+    if (responses.length === 0) {
+      console.error('❌ All model calls failed.');
+      return NextResponse.json({ content: '🚨 All AI models failed to generate a response. Please try again later.' }, { status: 500 });
+    }
+
+    // 5. Response Evaluation & Fusion
+    const bestResponseContent = evaluateAndFuseResponses(responses, prompt, userAnalysisResult);
+
+    // Get total tokens used across all successful model calls
+    let totalOutputTokens = responses.reduce((acc, res) => acc + (res.usage?.completion_tokens || 0), 0);
 
     const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-
-    // Create a readable stream to send chunks to the client
     const readableStream = new ReadableStream({
       async start(controller) {
-        // Step 1: Send proactive message if generated
         if (initialProactiveMessage) {
           const proactiveMessageId = crypto.randomUUID();
-          controller.enqueue(encoder.encode(`data:${JSON.stringify({
-            type: 'proactive_message',
-            id: proactiveMessageId,
-            content: initialProactiveMessage,
-            chatSessionId: chatSessionId,
-            created_at: new Date().toISOString()
-          })}\n\n`));
-
-          // Save the proactive message to DB
+          controller.enqueue(encoder.encode(`data:${JSON.stringify({ type: 'proactive_message', id: proactiveMessageId, content: initialProactiveMessage, chatSessionId, created_at: new Date().toISOString() })}\n\n`));
           await saveMessage(supabase, userId, chatSessionId, 'assistant', initialProactiveMessage);
         }
 
-        // Step 2: Proceed with the main LLM response for the user's prompt
-        let llmRes;
-        try {
-          llmRes = await fetch(OPENROUTER_API_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-              'HTTP-Referer': 'YOUR_SITE_URL_HERE', // Replace with your actual site URL
-              'X-Title': 'Your Chatbot Prototype', // Replace with your app title
-            },
-            body: JSON.stringify({
-              model: selectedModelForMainResponse, // Use the dynamically selected model
-              messages: messagesForLLM,
-              stream: true,
-              max_tokens: 500, // Increased max_tokens to allow for more detailed responses
-              temperature: 0.7, // Balance creativity and factual accuracy
-            }),
-            signal: AbortSignal.timeout(50000) // 50 second timeout for main LLM response
-          });
-        } catch (fetchError: any) {
-          console.error('❌ Fetch Error connecting to LLM for main response:', fetchError.message);
-          controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: `❌ Network error connecting to Quirra's AI for main response: ${fetchError.message}` })}\n\n`));
-          controller.enqueue(encoder.encode('data:[DONE]\n\n'));
-          return; // Exit if main LLM call fails
+        // The response is no longer a stream, send it as one chunk
+        controller.enqueue(encoder.encode(`data:${JSON.stringify({ type: 'llm_response_chunk', content: bestResponseContent })}\n\n`));
+        controller.enqueue(encoder.encode('data:[DONE]\n\n'));
+
+        // Save the fused response to DB
+        if (bestResponseContent) {
+          await saveMessage(supabase, userId, chatSessionId, 'assistant', bestResponseContent);
         }
 
-        if (!llmRes.ok || !llmRes.body) {
-          const errorText = await llmRes.text();
-          console.error('❌ Main LLM API Error:', llmRes.status, errorText);
-          let errorMessage = `❌ Quirra is having trouble generating a response.`;
-          try {
-            const errorJson = JSON.parse(errorText);
-            if (errorJson.message) {
-              errorMessage += ` (LLM says: ${errorJson.message})`;
-            } else if (errorJson.error?.message) {
-              errorMessage += ` (LLM says: ${errorJson.error.message})`;
-            }
-          } catch (e) {
-            errorMessage += ` (Raw error: ${errorText.substring(0, 100)}...)`;
-          }
-          controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: errorMessage })}\n\n`));
-          controller.enqueue(encoder.encode('data:[DONE]\n\n'));
-          return; // Exit if main LLM response is not OK
+        // Update daily token usage in Supabase after the main response is generated
+        const finalTokensUsed = estimatedInputTokens + totalOutputTokens;
+        const { error: updateUsageError } = await supabase
+          .from('profiles')
+          .update({ daily_token_usage: currentDailyTokenUsage + finalTokensUsed, last_usage_date: today })
+          .eq('id', userId);
+
+        if (updateUsageError) {
+          console.error('❌ Supabase Error: Failed to update daily token usage after response:', updateUsageError.message);
+        } else {
+          console.log(`✅ User ${userId} daily token usage updated. Used ${finalTokensUsed} tokens. New total: ${currentDailyTokenUsage + finalTokensUsed}/${DAILY_TOKEN_LIMIT}`);
         }
 
-        let accumulatedContent = ''; // Accumulate full response for saving
-        let totalOutputTokens = 0; // Track output tokens for usage
-        const reader = llmRes.body!.getReader();
-        let done = false;
-        let buffer = "";
-
-        try {
-          while (!done) {
-            const { value, done: readerDone } = await reader.read();
-            if (readerDone) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
-
-            let lastNewlineIndex = buffer.lastIndexOf('\n');
-            while (lastNewlineIndex !== -1) {
-                const line = buffer.substring(0, lastNewlineIndex).trim();
-                buffer = buffer.substring(lastNewlineIndex + 1);
-
-                if (line.startsWith('data:')) {
-                    const jsonStr = line.substring(5).trim();
-                    if (jsonStr === '[DONE]') {
-                        controller.enqueue(encoder.encode('data:[DONE]\n\n'));
-                        done = true;
-                        break;
-                    }
-                    try {
-                        const data = JSON.parse(jsonStr);
-                        const deltaContent = data.choices?.[0]?.delta?.content || '';
-                        // OpenRouter responses often include usage info in the final chunk
-                        const usage = data.usage;
-
-                        if (deltaContent) {
-                            accumulatedContent += deltaContent;
-                            controller.enqueue(encoder.encode(`data:${JSON.stringify({ type: 'llm_response_chunk', content: deltaContent })}\n\n`));
-                        }
-
-                        // Accumulate tokens from usage if available (usually in the last chunk)
-                        if (usage && usage.completion_tokens) {
-                            totalOutputTokens += usage.completion_tokens;
-                        }
-
-                    } catch (e) {
-                        console.error('Error parsing JSON from LLM stream chunk:', e, 'Raw JSON:', jsonStr);
-                    }
-                }
-                lastNewlineIndex = buffer.lastIndexOf('\n');
-            }
-          }
-        } catch (error: any) {
-          console.error('Error reading main LLM stream:', error);
-          controller.enqueue(encoder.encode(`data:${JSON.stringify({ content: `❌ Error streaming main response: ${error.message}` })}\n\n`));
-          controller.enqueue(encoder.encode('data:[DONE]\n\n'));
-          if (accumulatedContent) {
-            await saveMessage(supabase, userId, chatSessionId, 'assistant', accumulatedContent + ` [Error: ${error.message}]`);
-          }
-        } finally {
-          // Save the complete (or partially complete) main assistant message to DB
-          if (accumulatedContent) {
-            await saveMessage(supabase, userId, chatSessionId, 'assistant', accumulatedContent);
-          }
-
-          // Update daily token usage in Supabase after the main response is generated
-          const finalTokensUsed = estimatedInputTokens + totalOutputTokens;
-          const { error: updateUsageError } = await supabase
-            .from('profiles')
-            .update({ daily_token_usage: currentDailyTokenUsage + finalTokensUsed, last_usage_date: today })
-            .eq('id', userId);
-
-          if (updateUsageError) {
-            console.error('❌ Supabase Error: Failed to update daily token usage after response:', updateUsageError.message);
-          } else {
-            console.log(`✅ User ${userId} daily token usage updated. Used ${finalTokensUsed} tokens. New total: ${currentDailyTokenUsage + finalTokensUsed}/${DAILY_TOKEN_LIMIT}`);
-          }
-
-          controller.close();
-        }
+        controller.close();
       },
     });
 

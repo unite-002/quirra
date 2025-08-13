@@ -24,8 +24,10 @@ import {
   XCircle,
   Target, // Icon for Daily Focus and Goal Setting
   Smile, // Icon for Mood Logger
-  ChevronDown, // Icon for collapsing/expanding
-  ChevronUp,   // Icon for collapsing/expanding
+  Plus, // New icon for the floating button
+  Upload, // Icon for file upload
+  Library, // Icon for library
+  User, // New icon for user profile
 } from "lucide-react";
 import { PersonalityOnboarding } from "@/components/PersonalityOnboarding";
 import DailyFocusInput from '@/components/DailyFocusInput';
@@ -90,8 +92,8 @@ type ModalState = {
   onCancel?: () => void; // Callback for cancel action
 };
 
-// Define the width of the fixed vertical nav bar
-const FIXED_NAV_WIDTH = '64px'; // Tailwind's w-16 is 64px
+// Define the width of the main sidebar when open (and replaces the fixed nav)
+const SIDEBAR_WIDTH = '256px'; // Tailwind's w-64 is 256px
 
 // Define the daily token limit for display purposes (matches backend)
 const DAILY_TOKEN_LIMIT_CLIENT = 2000;
@@ -107,6 +109,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false); // For ongoing API requests
   const [isInitialLoading, setIsInitialLoading] = useState(true); // For initial auth/data load
   const [isRegenerating, setIsRegenerating] = useState(false); // For message regeneration state
+  const [showFloatingMenu, setShowFloatingMenu] = useState(false); // New state for floating menu
 
   // User and personality profile states
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -125,11 +128,11 @@ export default function Home() {
   const [showDailyFocusInput, setShowDailyFocusInput] = useState<boolean>(false);
   const [showMoodLogger, setShowMoodLogger] = useState<boolean>(false);
   const [showGoalSetting, setShowGoalSetting] = useState<boolean>(false); // State for GoalSetting visibility
-  const [isPersonalizationToolsExpanded, setIsPersonalizationToolsExpanded] = useState<boolean>(false); // State for collapsible section
 
   // Message interaction states
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null); // For copy-to-clipboard feedback
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null); // For editing user messages
+  const [showUserProfileOptions, setShowUserProfileOptions] = useState<boolean>(false); // State for user profile dropdown
 
   // New state for dynamic input position
   const [isChatEmpty, setIsChatEmpty] = useState(true);
@@ -147,14 +150,23 @@ export default function Home() {
   const textareaRef = useRef<HTMLTextAreaElement>(null); // For auto-resizing the input textarea
   const modalInputRef = useRef<HTMLInputElement>(null); // Ref for modal input field
   const sessionOptionsRef = useRef<HTMLDivElement>(null); // Ref for closing session options on outside click
+  const floatingMenuRef = useRef<HTMLDivElement>(null); // Ref for floating menu to close on outside click
+  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for hidden file input
+  const userProfileOptionsRef = useRef<HTMLDivElement>(null); // Ref for user profile options dropdown
 
   const router = useRouter(); // Next.js router for navigation
 
-  // Effect to close the session options menu when clicking outside
+  // Effect to close the session options menu, floating menu and user profile options when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (sessionOptionsRef.current && !sessionOptionsRef.current.contains(event.target as Node)) {
         setShowSessionOptionsForId(null);
+      }
+      if (floatingMenuRef.current && !floatingMenuRef.current.contains(event.target as Node)) {
+        setShowFloatingMenu(false);
+      }
+      if (userProfileOptionsRef.current && !userProfileOptionsRef.current.contains(event.target as Node)) {
+        setShowUserProfileOptions(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -218,7 +230,7 @@ export default function Home() {
     setShowDailyFocusInput(false);
     setShowMoodLogger(false);
     setShowGoalSetting(false);
-
+    setShowFloatingMenu(false); // Also close the floating menu
 
     const newSessionId = crypto.randomUUID(); // Generate a new UUID for the session
 
@@ -994,6 +1006,18 @@ export default function Home() {
     return <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />;
   };
 
+  // Handle file selection from the hidden input
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      // Process the selected files here
+      // For now, we'll just log them to the console.
+      console.log("Files selected:", event.target.files);
+      // You would then typically upload these files to a server or process them locally.
+    }
+    // Clear the input value to allow the same file to be selected again
+    event.target.value = '';
+  };
+
   // Show loading screen during initial authentication and data fetching
   if (isInitialLoading) {
     return (
@@ -1062,8 +1086,9 @@ export default function Home() {
 
       {/* Fixed Vertical Toolbar (Left Edge of Chat Page - Like Gemini) */}
       <div
-        className="fixed inset-y-0 left-0 w-16 bg-[#0A0B1A] border-r border-gray-800 z-50 flex flex-col items-center py-4"
-        style={{ width: FIXED_NAV_WIDTH }}
+        className={`fixed inset-y-0 left-0 w-16 bg-[#0A0B1A] border-r border-gray-800 z-50 flex flex-col items-center py-4 transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? '-translate-x-full' : 'translate-x-0'
+        }`}
       >
         {/* Sidebar Toggle Button (Top) */}
         <button
@@ -1074,80 +1099,79 @@ export default function Home() {
           <MenuIcon size={24} />
         </button>
 
-        {/* New Document/Compose Icon (Middle - Not the "New Chat" button here) */}
-        {/* This is a general compose action, similar to Gemini's floating compose button */}
-        <button
-          onClick={() => console.log("Compose/New Document action from fixed toolbar")} // Placeholder action
-          className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors flex items-center justify-center mb-auto"
-          aria-label="New Document/Compose"
-          title="New Document/Compose"
-        >
-          <PenSquare size={24} />
-        </button>
+        {/* --- Start of New Code: New Chat, Search, and Library icons --- */}
+        <div className="flex flex-col gap-4">
+          <button
+            onClick={() => handleNewChat(false)}
+            className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+            aria-label="New chat"
+            title="New Chat"
+          >
+            <PenSquare size={24} />
+          </button>
+          <button
+            onClick={() => console.log("Search chats")}
+            className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+            aria-label="Search chats"
+            title="Search Chats"
+          >
+            <Search size={24} />
+          </button>
+          <button
+            onClick={() => console.log("Open library")}
+            className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+            aria-label="Open library"
+            title="Library"
+          >
+            <Library size={24} />
+          </button>
+        </div>
+        {/* --- End of New Code --- */}
 
-        {/* User Profile Icon/Avatar at the bottom of fixed nav */}
-        {displayUserName && (
-            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-gray-700 text-white text-base font-bold mb-2 cursor-pointer hover:bg-gray-800 transition-colors"
-                 onClick={() => router.push("/settings")} // Optional: link to settings
-                 title={displayUserName}>
-                {displayUserName[0]?.toUpperCase()}
-            </div>
-        )}
-
-        {/* Settings Icon (Bottom) */}
-        <button
-          onClick={() => router.push("/settings")}
-          className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors flex items-center justify-center"
-          aria-label="Settings"
-          title="Settings"
-        >
-          <Settings size={24} />
-        </button>
       </div>
 
-      {/* Sidebar (slides from behind the fixed toolbar) */}
+      {/* Sidebar (slides from left and covers the fixed toolbar) */}
       <div
         className={`fixed inset-y-0 z-40 transform bg-[#1a213a] border-r border-gray-800 flex flex-col transition-transform duration-300 ease-in-out ${
           isSidebarOpen ? "translate-x-0 w-full md:w-64" : "-translate-x-full"
         }`}
-        style={{ left: FIXED_NAV_WIDTH }} // Position sidebar next to fixed nav
       >
-        {/* Sidebar Header (Quirra Title) */}
-        <div className="p-4 flex items-center justify-start border-b border-gray-800">
-          <h2 className="text-2xl font-bold text-white">Quirra</h2>
-        </div>
+         {/* Sidebar Header with Quirra text and Toggle Button */}
+         <div className="p-4 flex items-center justify-between">
+           <span className="text-gray-400 text-lg font-bold">Quirra</span>
+           <button
+             onClick={() => setIsSidebarOpen(false)}
+             className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+             aria-label="Close sidebar"
+           >
+             <MenuIcon size={24} />
+           </button>
+         </div>
 
-        {/* New Chat Button (Prominent) */}
-        <div className="p-2">
+
+        {/* New Chat, Search, Library buttons (as requested) */}
+        <div className="p-2 flex flex-col gap-1 border-b border-gray-800">
           <button
             onClick={() => handleNewChat(false)}
-            className="flex items-center gap-2 px-3 py-3 rounded-lg text-left bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors text-base w-full shadow-lg"
+            className="flex items-center gap-4 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-sm"
           >
             <PenSquare size={20} /> New Chat
           </button>
+          <button
+            onClick={() => console.log("Search chats")}
+            className="flex items-center gap-4 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-sm"
+          >
+            <Search size={20} /> Search Chats
+          </button>
+          <button
+            onClick={() => console.log("Open library")}
+            className="flex items-center gap-4 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-sm"
+          >
+            <Library size={20} /> Library
+          </button>
         </div>
 
-        {/* Search Bar */}
-        <div className="p-2 border-b border-gray-800">
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Search chats..."
-              className="w-full bg-[#0A0B1A] text-white rounded-lg py-2 pl-10 pr-3 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            />
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          </div>
-        </div>
-
-        {/* Daily Token Usage Display */}
-        <div className="p-2 border-b border-gray-800 text-sm text-gray-400">
-            <h3 className="text-xs font-semibold mb-1 px-2 text-gray-300">Daily Usage</h3>
-            <div className="flex items-center justify-between px-2 py-1 bg-gray-800 rounded-md">
-                <span>Tokens Used:</span>
-                <span className="font-bold text-white">{dailyTokenUsage} / {DAILY_TOKEN_LIMIT_CLIENT}</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-1 px-2">Resets daily.</p>
-        </div>
+        {/* Removed Daily Usage display from here */}
 
         {/* Recent Chats Section */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-2 border-b border-gray-800">
@@ -1212,81 +1236,63 @@ export default function Home() {
           )}
         </div>
 
-        {/* Personalization Tools Section (Collapsible) */}
-        <div className="p-2 border-b border-gray-800 flex flex-col">
-          <button
-            onClick={() => setIsPersonalizationToolsExpanded(prev => !prev)}
-            className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-800 hover:text-white transition-colors text-base w-full font-semibold"
-            aria-expanded={isPersonalizationToolsExpanded}
-            aria-controls="personalization-tools-content"
-          >
-            Personalization Tools
-            {isPersonalizationToolsExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-          </button>
-          <div
-            id="personalization-tools-content"
-            className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              isPersonalizationToolsExpanded ? 'max-h-48 opacity-100 mt-1' : 'max-h-0 opacity-0'
-            }`}
-          >
-            <div className="flex flex-col gap-1 pl-2 pr-2">
-              <button
-                onClick={() => {
-                  setShowDailyFocusInput(prev => !prev);
-                  setShowMoodLogger(false); // Hide mood logger if daily focus is shown
-                  setShowGoalSetting(false); // Hide goal setting if daily focus is shown
-                  setIsSidebarOpen(false); // Close sidebar after clicking
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-gray-300 hover:bg-gray-800 hover:text-white transition-colors text-sm w-full"
-              >
-                <Target size={16} /> Daily Focus
-              </button>
-              <button
-                onClick={() => {
-                  setShowMoodLogger(prev => !prev);
-                  setShowDailyFocusInput(false); // Hide daily focus if mood logger is shown
-                  setShowGoalSetting(false); // Hide goal setting if mood logger is shown
-                  setIsSidebarOpen(false); // Close sidebar after clicking
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-gray-300 hover:bg-gray-800 hover:text-white transition-colors text-sm w-full"
-              >
-                <Smile size={16} /> Log Mood
-              </button>
-              {/* Button for Goal Setting */}
-              <button
-                onClick={() => {
-                  setShowGoalSetting(prev => !prev);
-                  setShowDailyFocusInput(false); // Hide daily focus if goal setting is shown
-                  setShowMoodLogger(false); // Hide mood logger if goal setting is shown
-                  setIsSidebarOpen(false); // Close sidebar after clicking
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-gray-300 hover:bg-gray-800 hover:text-white transition-colors text-sm w-full"
-              >
-                <Target size={16} /> Set Goal
-              </button>
+        {/* User Profile Section at the bottom of the sidebar */}
+        <div className="mt-auto p-4 border-t border-gray-800">
+            <div className="relative" ref={userProfileOptionsRef}>
+                <button
+                    onClick={() => setShowUserProfileOptions(prev => !prev)}
+                    className="flex items-center w-full gap-3 text-left p-2 rounded-lg hover:bg-gray-800 transition-colors text-gray-300"
+                >
+                    {/* User avatar/initials */}
+                    <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
+                        {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={18} />}
+                    </div>
+                    {/* Username or "User" fallback */}
+                    <span className="flex-1 text-sm">{displayUserName || "User"}</span>
+                </button>
+                {showUserProfileOptions && (
+                    <div className="absolute bottom-full mb-2 left-0 w-full bg-[#2a304e] border border-gray-700 rounded-lg shadow-lg z-50 animate-slideUpAndFade">
+                        {/* New Daily Usage Display inside the dropdown */}
+                        <div className="px-4 py-2 text-sm text-gray-300 border-b border-gray-700">
+                            <span className="font-semibold block mb-1">Daily Usage</span>
+                            <div className="flex justify-between items-center text-xs">
+                                <span>Tokens Used:</span>
+                                <span className="font-bold text-white">{dailyTokenUsage} / {DAILY_TOKEN_LIMIT_CLIENT}</span>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => {
+                                router.push("/settings");
+                                setShowUserProfileOptions(false);
+                            }}
+                            className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                        >
+                            <Settings size={16} />
+                            <span>Settings</span>
+                        </button>
+                        <button
+                            onClick={handleLogout}
+                            className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-red-400 hover:bg-red-700 hover:text-white rounded-b-lg transition-colors"
+                        >
+                            <LogOut size={16} />
+                            <span>Sign Out</span>
+                        </button>
+                    </div>
+                )}
             </div>
-          </div>
-        </div>
-
-        {/* Sign Out Section (Settings and User Avatar are in fixed nav) */}
-        <div className="p-2 border-t border-gray-800 flex flex-col gap-1">
-          <h3 className="text-gray-400 text-xs font-semibold mb-1 px-2">Account</h3>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-red-400 hover:bg-red-700 hover:text-white transition-colors text-sm mt-1 w-full"
-          >
-            <LogOut size={16} /> Sign Out
-          </button>
         </div>
       </div>
 
       {/* Main Content Area */}
       <main
         className={`flex-1 flex flex-col transition-all duration-300 ease-in-out`}
-        style={{ marginLeft: FIXED_NAV_WIDTH }} // Always offset by fixed nav width
+        // Dynamically set marginLeft based on sidebar state
+        style={{
+          marginLeft: isSidebarOpen ? SIDEBAR_WIDTH : '64px',
+        }}
       >
-        {/* Header for main content (hidden when chat is empty and no tools are open) */}
-        <header className={`p-4 flex items-center gap-4 border-b border-gray-800 bg-[#0A0B1A] shadow-lg ${isChatEmpty && !showDailyFocusInput && !showMoodLogger && !showGoalSetting ? 'hidden' : 'flex'}`}>
+        {/* Removed header as per request */}
+        {/* <header className={`p-4 flex items-center gap-4 border-b border-gray-800 bg-[#0A0B1A] shadow-lg ${isChatEmpty && !showDailyFocusInput && !showMoodLogger && !showGoalSetting ? 'hidden' : 'flex'}`}>
           <h1 className="text-xl font-bold text-white">Quirra</h1>
           <div className="flex-1"></div>
           {messages.length > 0 && (
@@ -1298,38 +1304,133 @@ export default function Home() {
               <RotateCcw size={18} /> Reset
             </button>
           )}
-        </header>
+        </header> */}
 
-        {/* Daily Focus Input Rendered Conditionally */}
+        {/* Daily Focus Input Rendered Conditionally with close button */}
         {showDailyFocusInput && (
           <div className="w-full max-w-4xl mx-auto px-4 py-4 animate-fadeIn">
-            <DailyFocusInput />
+            <div className="relative">
+              <DailyFocusInput />
+              <button
+                onClick={() => setShowDailyFocusInput(false)}
+                className="absolute top-2 right-2 text-gray-400 hover:text-white transition-colors p-1"
+                aria-label="Close Daily Focus"
+              >
+                <XCircle size={24} />
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Mood Logger Rendered Conditionally */}
+        {/* Mood Logger Rendered Conditionally with close button */}
         {showMoodLogger && (
           <div className="w-full max-w-4xl mx-auto px-4 py-4 animate-fadeIn">
-            <MoodLogger />
+            <div className="relative">
+              <MoodLogger />
+              <button
+                onClick={() => setShowMoodLogger(false)}
+                className="absolute top-2 right-2 text-gray-400 hover:text-white transition-colors p-1"
+                aria-label="Close Mood Logger"
+              >
+                <XCircle size={24} />
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Goal Setting Rendered Conditionally */}
+        {/* Goal Setting Rendered Conditionally with close button */}
         {showGoalSetting && (
           <div className="w-full max-w-4xl mx-auto px-4 py-4 animate-fadeIn">
-            <GoalSetting />
+            <div className="relative">
+              <GoalSetting />
+              <button
+                onClick={() => setShowGoalSetting(false)}
+                className="absolute top-2 right-2 text-gray-400 hover:text-white transition-colors p-1"
+                aria-label="Close Goal Setting"
+              >
+                <XCircle size={24} />
+              </button>
+            </div>
           </div>
         )}
 
         {/* Main chat display area OR Initial Centered Input */}
         {isChatEmpty && !showDailyFocusInput && !showMoodLogger && !showGoalSetting ? (
           <div className="flex-1 flex flex-col justify-center items-center text-center px-4 py-6 w-full">
-            <h2 className="text-gray-400 text-4xl font-semibold mb-8 animate-fadeIn">
-              How can I help you today, {chatbotUserName || "User"}?
+            <h2 className="text-gray-400 text-3xl font-semibold mb-10 animate-fadeIn">
+              How can I help you today?
             </h2>
             {/* Centered Input Form - Wider and more prominent */}
-            <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-4 flex items-end bg-[#131422] rounded-3xl shadow-lg mb-4 border border-gray-800 animate-fadeInUp">
-              <div className="relative flex-1">
+            <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-2.5 flex items-end bg-[#131422] rounded-3xl shadow-lg border border-gray-800 animate-fadeInUp">
+              <div className="relative flex-1 flex items-end">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  multiple
+                  className="hidden"
+                  onChange={handleFileChange}
+                  accept="*"
+                />
+                {/* Floating button and menu */}
+                <div ref={floatingMenuRef} className="relative z-10 mr-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFloatingMenu(!showFloatingMenu)}
+                    className={`w-10 h-10 flex items-center justify-center rounded-full transition-all duration-300 ${
+                      showFloatingMenu ? 'bg-blue-600 rotate-45' : 'bg-[#1a213a] hover:bg-[#2a304e] rotate-0'
+                    }`}
+                    aria-label="Add more options"
+                  >
+                    <Plus size={20} className="text-white" />
+                  </button>
+                  {showFloatingMenu && (
+                    <div className="absolute bottom-12 left-0 w-max bg-[#1a213a] rounded-lg shadow-xl border border-gray-700 z-20 flex flex-col p-2 animate-slideUpAndFade">
+                      <button
+                        onClick={() => {
+                          fileInputRef.current?.click();
+                          setShowFloatingMenu(false);
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                      >
+                        <Upload size={16} /> Upload file
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowDailyFocusInput(prev => !prev);
+                          setShowMoodLogger(false);
+                          setShowGoalSetting(false);
+                          setShowFloatingMenu(false);
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                      >
+                        <Target size={16} /> Set Daily Focus
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowGoalSetting(prev => !prev);
+                          setShowDailyFocusInput(false);
+                          setShowMoodLogger(false);
+                          setShowFloatingMenu(false);
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                      >
+                        <Target size={16} /> Set Goal
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowMoodLogger(prev => !prev);
+                          setShowDailyFocusInput(false);
+                          setShowGoalSetting(false);
+                          setShowFloatingMenu(false);
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                      >
+                        <Smile size={16} /> Log Mood
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <textarea
                   ref={textareaRef}
                   value={input}
@@ -1337,20 +1438,20 @@ export default function Home() {
                   onKeyDown={handleTextAreaKeyDown}
                   rows={1}
                   placeholder={isLoading ? "Quirra is typing..." : editingMessageId ? "Editing message..." : "Ask Quirra Anything..."}
-                  className="w-full resize-none bg-[#131422] rounded-2xl py-5 pl-5 pr-20 text-white placeholder-gray-400 focus:outline-none custom-scrollbar text-base max-h-[120px] overflow-hidden border border-transparent focus:border-transparent focus:ring-0"
+                  className="w-full resize-none bg-[#131422] rounded-full py-3.5 pl-5 pr-20 text-white placeholder-gray-400 focus:outline-none custom-scrollbar text-base max-h-[120px] overflow-hidden border border-transparent focus:border-transparent focus:ring-0"
                   disabled={isLoading}
                 />
                 {(input.trim() || isLoading) && (
                   <button
                     type="submit"
-                    className="absolute bottom-3 right-3 flex items-center justify-center gap-1.5 px-4 py-2 rounded-2xl bg-[#1a213a] text-gray-300 hover:bg-[#2a304e] transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+                    className="absolute bottom-2 right-2 flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
                     disabled={!input.trim() || isLoading}
                     aria-label="Send message"
                   >
                     {(isLoading || isRegenerating) ? (
-                      <Loader2 className="animate-spin" size={20} />
+                      <Loader2 className="animate-spin text-white" size={20} />
                     ) : (
-                      <Send size={20} className="rotate-0 transition-transform duration-200" />
+                      <Send size={20} className="text-white" />
                     )}
                     <span className="sr-only">Send</span>
                   </button>
@@ -1499,7 +1600,75 @@ export default function Home() {
             // Adjusted classes for ChatGPT-like input area
             className="sticky bottom-0 w-full max-w-3xl mx-auto p-3 flex items-end bg-[#131422] rounded-3xl shadow-lg mb-4 border border-gray-800"
           >
-            <div className="relative flex-1">
+            <div className="relative flex-1 flex items-end">
+              <input
+                type="file"
+                ref={fileInputRef}
+                multiple
+                className="hidden"
+                onChange={handleFileChange}
+                accept="*"
+              />
+              {/* Floating button and menu */}
+              <div ref={floatingMenuRef} className="relative z-10 mr-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFloatingMenu(!showFloatingMenu)}
+                  className={`w-10 h-10 flex items-center justify-center rounded-full transition-all duration-300 ${
+                    showFloatingMenu ? 'bg-blue-600 rotate-45' : 'bg-[#1a213a] hover:bg-[#2a304e] rotate-0'
+                  }`}
+                  aria-label="Add more options"
+                >
+                  <Plus size={20} className="text-white" />
+                </button>
+                {showFloatingMenu && (
+                  <div className="absolute bottom-12 left-0 w-max bg-[#1a213a] rounded-lg shadow-xl border border-gray-700 z-20 flex flex-col p-2 animate-slideUpAndFade">
+                    <button
+                      onClick={() => {
+                        fileInputRef.current?.click();
+                        setShowFloatingMenu(false);
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <Upload size={16} /> Upload file
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowDailyFocusInput(prev => !prev);
+                        setShowMoodLogger(false);
+                        setShowGoalSetting(false);
+                        setShowFloatingMenu(false);
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <Target size={16} /> Set Daily Focus
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowGoalSetting(prev => !prev);
+                        setShowDailyFocusInput(false);
+                        setShowMoodLogger(false);
+                        setShowFloatingMenu(false);
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <Target size={16} /> Set Goal
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowMoodLogger(prev => !prev);
+                        setShowDailyFocusInput(false);
+                        setShowGoalSetting(false);
+                        setShowFloatingMenu(false);
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <Smile size={16} /> Log Mood
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -1508,14 +1677,14 @@ export default function Home() {
                 rows={1}
                 placeholder={isLoading ? "Quirra is typing..." : editingMessageId ? "Editing message..." : "Ask Quirra Anything..."}
                 // Adjusted pr-12 to pr-20 to make room for the new wider button
-                className="w-full resize-none bg-[#131422] rounded-2xl py-3.5 pl-4 pr-20 text-white placeholder-gray-400 focus:outline-none custom-scrollbar text-base max-h-[120px] overflow-hidden border border-transparent focus:border-transparent focus:ring-0"
+                className="w-full resize-none bg-[#131422] rounded-full py-3.5 pl-4 pr-12 text-white placeholder-gray-400 focus:outline-none custom-scrollbar text-base max-h-[120px] overflow-hidden border border-transparent focus:border-transparent focus:ring-0"
                 disabled={isLoading}
               />
               {(input.trim() || isLoading) && ( // Show send button only if input has text or is loading
                 <button
                   type="submit"
                   // Adjusted classes for send button to a horizontal "pill" shape
-                  className="absolute bottom-2 right-2 flex items-center justify-center gap-1.5 px-4 py-2 rounded-2xl bg-[#1a213a] text-gray-300 hover:bg-[#2a304e] transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  className="absolute bottom-2 right-2 flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
                   disabled={!input.trim() || isLoading}
                   aria-label="Send message"
                 >
@@ -1531,6 +1700,35 @@ export default function Home() {
           </form>
         )}
       </main>
+      <style jsx global>{`
+        /* WebKit Scrollbar Styles (for Chrome, Safari, etc.) */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 8px; /* Set a slim width */
+          height: 8px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent; /* Make the track transparent */
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background-color: rgba(156, 163, 175, 0.2); /* Semi-transparent gray thumb */
+          border-radius: 10px; /* Rounded corners */
+          border: 2px solid transparent; /* Creates padding around the thumb */
+          background-clip: padding-box; /* Ensures the border doesn't get colored */
+          transition: background-color 0.3s ease; /* Smooth transition for hover */
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background-color: rgba(156, 163, 175, 0.4); /* Darker on hover */
+        }
+
+        /* Firefox Scrollbar Styles */
+        .custom-scrollbar {
+          scrollbar-width: thin; /* "auto" or "thin" */
+          scrollbar-color: rgba(156, 163, 175, 0.2) transparent; /* thumb and track color */
+        }
+      `}</style>
     </div>
   );
 }
