@@ -725,11 +725,6 @@ function evaluateAndFuseResponses(
 }
 
 // Ensure body parser is disabled for this route to handle FormData
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
 
 export async function POST(req: Request) {
   // 1. Handle FormData in POST Request
