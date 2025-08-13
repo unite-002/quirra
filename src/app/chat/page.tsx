@@ -114,7 +114,8 @@ export default function Home() {
   // User and personality profile states
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [displayUserName, setDisplayUserName] = useState<string | null>(null);
-  const [chatbotUserName, setChatbotUserName] = useState<string | null>(null);
+  const [chatbotUserName, setChatbotUserName,
+  ] = useState<string | null>(null);
   const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
   const [dailyTokenUsage, setDailyTokenUsage] = useState<number>(0); // New state for daily token usage
 
@@ -1099,7 +1100,7 @@ export default function Home() {
           <MenuIcon size={24} />
         </button>
 
-        {/* --- Start of New Code: New Chat, Search, and Library icons --- */}
+        {/* New Chat, Search, and Library icons */}
         <div className="flex flex-col gap-4">
           <button
             onClick={() => handleNewChat(false)}
@@ -1126,8 +1127,18 @@ export default function Home() {
             <Library size={24} />
           </button>
         </div>
-        {/* --- End of New Code --- */}
 
+        {/* User profile icon at the bottom of the fixed toolbar */}
+        {/* Clicking this button now simply opens the main sidebar */}
+        <div className="mt-auto relative">
+            <button
+                onClick={() => setIsSidebarOpen(true)}
+                className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-600 text-white font-bold text-sm hover:ring-2 ring-blue-500 transition-all"
+                title={displayUserName || "User Profile"}
+            >
+                {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={18} />}
+            </button>
+        </div>
       </div>
 
       {/* Sidebar (slides from left and covers the fixed toolbar) */}
@@ -1149,7 +1160,7 @@ export default function Home() {
          </div>
 
 
-        {/* New Chat, Search, Library buttons (as requested) */}
+        {/* New Chat, Search, Library buttons */}
         <div className="p-2 flex flex-col gap-1 border-b border-gray-800">
           <button
             onClick={() => handleNewChat(false)}
@@ -1170,8 +1181,6 @@ export default function Home() {
             <Library size={20} /> Library
           </button>
         </div>
-
-        {/* Removed Daily Usage display from here */}
 
         {/* Recent Chats Section */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-2 border-b border-gray-800">
