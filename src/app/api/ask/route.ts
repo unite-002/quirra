@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
-import { analyzeMessage, MessageAnalysis, DEFAULT_ANALYSIS } from '@/utils/analyzeMessage';
+import { analyzeMessage, MessageAnalysis } from '@/utils/analyzeMessage';
 import { summarizeEmotionalTrends } from '@/utils/summarizeEmotionalTrends';
 import { performance } from 'perf_hooks';
 import { IncomingForm } from 'formidable';
@@ -11,6 +11,8 @@ import path from 'path';
 import util from 'util';
 import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
+import { Readable } from 'stream';
+import type { IncomingMessage } from 'http'; // Import IncomingMessage type for the fix
 
 // Promisify the file parsing function for async/await usage
 const readFileAsync = util.promisify(fs.readFile);
@@ -70,10 +72,6 @@ interface LatLng {
   lng: number;
 }
 
-// --- Next.js 14 / Vercel Build Compatibility Enhancement ---
-// The original `export const config = { runtime: 'nodejs' }` is deprecated for App Router.
-// The new method is `export const runtime = 'nodejs';`
-// We are using 'nodejs' because the code relies on Node.js-specific APIs like 'fs' and 'path'.
 export const runtime = 'nodejs';
 export const maxDuration = 300; // Increased max duration for longer operations
 
@@ -239,8 +237,6 @@ async function saveMessage(
 
   return true;
 }
-
-// ... (Geocoding, Directions, Matrix, Isochrones, Elevation utility functions remain unchanged) ...
 
 /**
  * Utility function to call OpenRouteService Geocoding API.
@@ -454,8 +450,6 @@ async function getElevation(coordinates: LatLng[]): Promise<string | null> {
   }
 }
 
-// ... (getQuirraPersonalizedInstruction function remains unchanged) ...
-
 /**
  * Generates a dynamic system instruction for the LLM based on user's personality,
  * current message analysis, and conversation context. This prompt is crucial for
@@ -557,17 +551,17 @@ const getQuirraPersonalizedInstruction = (
         if (sentiment_label === 'negative') {
             instructions.push(`**General Negative Sentiment:** Prioritize acknowledging their feeling empathetically and gently guide them towards a solution or understanding. Your tone should be supportive and understanding.`);
             if (feedback_preference === 'encouraging') {
-            instructions.push("Deliver support with reassuring, uplifting language, emphasizing progress and capability.");
-          } else if (feedback_preference === 'challenging') {
-            instructions.push("Frame your support as a gentle challenge. Encourage them to self-reflect and identify actionable steps to overcome the issue.");
-          } else {
-            instructions.push("Offer a structured, step-by-step approach to help them analyze and constructively resolve their problem.");
-          }
+                instructions.push("Deliver support with reassuring, uplifting language, emphasizing progress and capability.");
+            } else if (feedback_preference === 'challenging') {
+                instructions.push("Frame your support as a gentle challenge. Encourage them to self-reflect and identify actionable steps to overcome the issue.");
+            } else {
+                instructions.push("Offer a structured, step-by-step approach to help them analyze and constructively resolve their problem.");
+            }
         } else if (sentiment_label === 'positive') {
             instructions.push(`**General Positive Sentiment:** Acknowledge and reflect their positive outlook. Express shared enthusiasm, congratulate them, or build on their positive momentum.`);
             if (feedback_preference === 'encouraging') {
-            instructions.push("Reinforce their positive feelings with affirming and motivational language, celebrating their success or good mood.");
-          }
+                instructions.push("Reinforce their positive feelings with affirming and motivational language, celebrating their success or good mood.");
+            }
         } else if (sentiment_label === 'mixed') {
             instructions.push(`**General Mixed Sentiment:** The user expresses mixed emotions. Address both positive and negative aspects carefully, offering balanced support.`);
         } else { // Neutral or undefined
@@ -728,14 +722,7 @@ function evaluateAndFuseResponses(
   return bestResponse.content;
 }
 
-// Ensure body parser is disabled for this route to handle FormData
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   // 1. Handle FormData in POST Request
   const form = new IncomingForm();
   
@@ -743,8 +730,10 @@ export async function POST(req: Request) {
   let files: Files;
   
   try {
+    const nodeReq = Readable.fromWeb(req.body as any);
+    // FIX: Cast nodeReq to IncomingMessage to satisfy TypeScript, as formidable handles it correctly at runtime
     [fields, files] = await new Promise<[Fields, Files]>((resolve, reject) => {
-      form.parse(req as any, (err, flds, fls) => {
+      form.parse(nodeReq as unknown as IncomingMessage, (err, flds, fls) => {
         if (err) return reject(err);
         resolve([flds, fls]);
       });
