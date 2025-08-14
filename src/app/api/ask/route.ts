@@ -12,7 +12,14 @@ import util from 'util';
 import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
 import { Readable } from 'stream';
-import type { IncomingMessage } from 'http'; // Import IncomingMessage type for the fix
+import type { IncomingMessage } from 'http';
+
+// --- NEWLY ADDED CONSTANT DEFINITIONS TO RESOLVE ERRORS ---
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const DAILY_TOKEN_LIMIT = 200000; // Example: 200,000 tokens per day
+const PROACTIVE_CHECKIN_INTERVAL_HOURS = 24; // Check in once every 24 hours
+const MESSAGE_COUNT_FOR_EMOTIONAL_SUMMARY = 10; // Trigger a summary every 10 messages
+// --- END OF NEW DEFINITIONS ---
 
 // Promisify the file parsing function for async/await usage
 const readFileAsync = util.promisify(fs.readFile);
@@ -73,13 +80,8 @@ interface LatLng {
 }
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic'; // Added as per the fix to ensure Node.js runtime is used
 export const maxDuration = 300; // Increased max duration for longer operations
-
-// Define how often to trigger emotional trend summarization
-const MESSAGE_COUNT_FOR_EMOTIONAL_SUMMARY = 5; // Trigger summarization every 5 user messages
-const PROACTIVE_CHECKIN_INTERVAL_HOURS = 24; // Trigger proactive check-in every 24 hours
-const DAILY_TOKEN_LIMIT = 50000; // 50,000 tokens per user per day for the prototype - ADJUST AS NEEDED!
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 // --- OpenRouter Configuration ---
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || 'YOUR_OPENROUTER_API_KEY_HERE';
@@ -565,7 +567,7 @@ const getQuirraPersonalizedInstruction = (
         } else if (sentiment_label === 'mixed') {
             instructions.push(`**General Mixed Sentiment:** The user expresses mixed emotions. Address both positive and negative aspects carefully, offering balanced support.`);
         } else { // Neutral or undefined
-            instructions.push(`**General Neutral Sentiment:** Maintain your standard helpful, curious, and professional demeanor, focusing on clear and concise information.`);
+            instructions.push("Maintain your standard helpful, curious, and professional demeanor, focusing on clear and concise information.");
         }
     }
   } else {
@@ -730,8 +732,13 @@ export async function POST(req: NextRequest) {
   let files: Files;
   
   try {
-    const nodeReq = Readable.fromWeb(req.body as any);
-    // FIX: Cast nodeReq to IncomingMessage to satisfy TypeScript, as formidable handles it correctly at runtime
+    const headers: Record<string, string> = {};
+    req.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+    
+    const nodeReq = Object.assign(Readable.fromWeb(req.body as any), { headers });
+    
     [fields, files] = await new Promise<[Fields, Files]>((resolve, reject) => {
       form.parse(nodeReq as unknown as IncomingMessage, (err, flds, fls) => {
         if (err) return reject(err);
@@ -743,21 +750,53 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ content: '❌ Failed to process the request due to an issue with file upload.' }, { status: 400 });
   }
 
-  let prompt: string | undefined = Array.isArray(fields.prompt) ? fields.prompt[0] : fields.prompt;
-  
-  // FIX: Handle the case where prompt is undefined
-  if (!prompt) {
-    return NextResponse.json({ content: '⚠️ Please enter a message to chat with Quirra.' }, { status: 400 });
+  // --- START OF NEW, CORRECTED FIX FOR PROMPT AND MESSAGES ---
+  let prompt: string | undefined = '';
+  if (fields.prompt) {
+      prompt = Array.isArray(fields.prompt) ? fields.prompt[0] : fields.prompt;
   }
   
-  // Now TypeScript knows that `prompt` is a string here
   const reset = Array.isArray(fields.reset) ? fields.reset[0] === 'true' : fields.reset === 'true';
   const userName = Array.isArray(fields.userName) ? fields.userName[0] : fields.userName;
-  const clientPersonalityProfile = fields.personalityProfile ? JSON.parse(Array.isArray(fields.personalityProfile) ? fields.personalityProfile[0] : fields.personalityProfile) : null;
   const chatSessionId = Array.isArray(fields.chatSessionId) ? fields.chatSessionId[0] : fields.chatSessionId;
-  const messages = fields.messages ? JSON.parse(Array.isArray(fields.messages) ? fields.messages[0] : fields.messages) : [];
   const isRegenerating = Array.isArray(fields.isRegenerating) ? fields.isRegenerating[0] === 'true' : fields.isRegenerating === 'true';
 
+  let messages = [];
+  const rawMessages = fields.messages;
+  if (rawMessages) {
+    const messageData = Array.isArray(rawMessages) ? rawMessages[0] : rawMessages;
+    
+    if (typeof messageData === 'string') {
+        try {
+            const parsedData = JSON.parse(messageData);
+            messages = Array.isArray(parsedData) ? parsedData : [parsedData];
+        } catch (e) {
+            console.error('❌ Error parsing messages JSON, assuming it is already a valid array/object:', e);
+            messages = Array.isArray(messageData) ? messageData : [messageData as any];
+        }
+    } else {
+        // If it's not a string, ensure it's an array
+        messages = Array.isArray(messageData) ? messageData : [messageData as any];
+    }
+  }
+
+  let clientPersonalityProfile = null;
+  const rawPersonalityProfile = fields.personalityProfile;
+  if (rawPersonalityProfile) {
+    const profileData = Array.isArray(rawPersonalityProfile) ? rawPersonalityProfile[0] : rawPersonalityProfile;
+    if (typeof profileData === 'string') {
+        try {
+            clientPersonalityProfile = JSON.parse(profileData);
+        } catch (e) {
+            console.error('❌ Error parsing personalityProfile JSON, using raw value:', e);
+            clientPersonalityProfile = profileData as any;
+        }
+    } else {
+        clientPersonalityProfile = profileData as any;
+    }
+  }
+  // --- END OF NEW, CORRECTED FIX ---
+  
   let uploadedFileContent = '';
 
   // 2. File Validation and 3. Read File Content
@@ -1178,7 +1217,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4. Invoke SERPER API for Live Web Search (If Needed)
+    // A check to see if the user has enough messages to summarize
+    const MIN_MESSAGES_FOR_SUMMARY = 5;
+    const MAX_HISTORY_FOR_SUMMARY = 10;
+    if (historyData && historyData.length >= MIN_MESSAGES_FOR_SUMMARY) {
+      const messagesToSummarize = historyData.slice(-MAX_HISTORY_FOR_SUMMARY);
+      if (messagesToSummarize.length > 0) {
+        console.log(`🧠 Triggering summarization for ${messagesToSummarize.length} messages in session ${chatSessionId}...`);
+        const summarizeApiUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/summarize` : 'http://localhost:3000/api/summarize';
+        fetch(summarizeApiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chatSessionId: chatSessionId, messagesToSummarize: messagesToSummarize.map((msg: any) => ({ role: msg.role, content: msg.content })) }),
+        }).then(response => {
+          if (!response.ok) { response.json().then(err => console.error('❌ Summarization API Error:', err.message)); }
+          else { console.log('✅ Summarization API call initiated successfully.'); }
+        }).catch(err => { console.error('❌ Error calling summarization API:', err); });
+      }
+    }
+
+    // --- 4. Invoke SERPER API for Live Web Search (If Needed) ---
     const needsLiveSearch = serperKey && (userAnalysisResult.intent === 'information_seeking' || userAnalysisResult.intent === 'question' || userAnalysisResult.topic_keywords.some((keyword: string) => ["news", "current", "latest", "update", "weather", "define", "how to", "what is"].includes(keyword.toLowerCase())) || prompt.toLowerCase().includes('search'));
 
     if (needsLiveSearch && serperKey) {
@@ -1219,25 +1277,7 @@ export async function POST(req: NextRequest) {
       messagesForLLM.push({ role: 'system' as const, content: `(Internal Note: Serper API key is missing. Live search is unavailable. Answer based on general knowledge and context.)` });
     }
 
-    const MIN_MESSAGES_FOR_SUMMARY = 5;
-    const MAX_HISTORY_FOR_SUMMARY = 10;
-    if (historyData && historyData.length >= MIN_MESSAGES_FOR_SUMMARY) {
-      const messagesToSummarize = historyData.slice(-MAX_HISTORY_FOR_SUMMARY);
-      if (messagesToSummarize.length > 0) {
-        console.log(`🧠 Triggering summarization for ${messagesToSummarize.length} messages in session ${chatSessionId}...`);
-        const summarizeApiUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/summarize` : 'http://localhost:3000/api/summarize';
-        fetch(summarizeApiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatSessionId: chatSessionId, messagesToSummarize: messagesToSummarize.map((msg: any) => ({ role: msg.role, content: msg.content })) }),
-        }).then(response => {
-          if (!response.ok) { response.json().then(err => console.error('❌ Summarization API Error:', err.message)); }
-          else { console.log('✅ Summarization API call initiated successfully.'); }
-        }).catch(err => { console.error('❌ Error calling summarization API:', err); });
-      }
-    }
-
-    // --- 3. Dispatch to All LLM Models (Parallel Model Querying) ---
+    // --- 5. Dispatch to All LLM Models (Parallel Model Querying) ---
     const modelsToQuery = getRelevantModels(prompt);
     console.log(`🤖 Dispatching prompt to models: ${modelsToQuery.join(', ')}`);
 
@@ -1290,7 +1330,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ content: '🚨 All AI models failed to generate a response. Please try again later.' }, { status: 500 });
     }
 
-    // 5. Response Evaluation & Fusion
+    // 6. Response Evaluation & Fusion
     const bestResponseContent = evaluateAndFuseResponses(responses, prompt, userAnalysisResult);
 
     // Get total tokens used across all successful model calls
