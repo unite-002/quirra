@@ -70,6 +70,10 @@ interface LatLng {
   lng: number;
 }
 
+// --- Next.js 14 / Vercel Build Compatibility Enhancement ---
+// The original `export const config = { runtime: 'nodejs' }` is deprecated for App Router.
+// The new method is `export const runtime = 'nodejs';`
+// We are using 'nodejs' because the code relies on Node.js-specific APIs like 'fs' and 'path'.
 export const runtime = 'nodejs';
 export const maxDuration = 300; // Increased max duration for longer operations
 
@@ -553,17 +557,17 @@ const getQuirraPersonalizedInstruction = (
         if (sentiment_label === 'negative') {
             instructions.push(`**General Negative Sentiment:** Prioritize acknowledging their feeling empathetically and gently guide them towards a solution or understanding. Your tone should be supportive and understanding.`);
             if (feedback_preference === 'encouraging') {
-                instructions.push("Deliver support with reassuring, uplifting language, emphasizing progress and capability.");
-            } else if (feedback_preference === 'challenging') {
-                instructions.push("Frame your support as a gentle challenge. Encourage them to self-reflect and identify actionable steps to overcome the issue.");
-            } else {
-                instructions.push("Offer a structured, step-by-step approach to help them analyze and constructively resolve their problem.");
-            }
+            instructions.push("Deliver support with reassuring, uplifting language, emphasizing progress and capability.");
+          } else if (feedback_preference === 'challenging') {
+            instructions.push("Frame your support as a gentle challenge. Encourage them to self-reflect and identify actionable steps to overcome the issue.");
+          } else {
+            instructions.push("Offer a structured, step-by-step approach to help them analyze and constructively resolve their problem.");
+          }
         } else if (sentiment_label === 'positive') {
             instructions.push(`**General Positive Sentiment:** Acknowledge and reflect their positive outlook. Express shared enthusiasm, congratulate them, or build on their positive momentum.`);
             if (feedback_preference === 'encouraging') {
-                instructions.push("Reinforce their positive feelings with affirming and motivational language, celebrating their success or good mood.");
-            }
+            instructions.push("Reinforce their positive feelings with affirming and motivational language, celebrating their success or good mood.");
+          }
         } else if (sentiment_label === 'mixed') {
             instructions.push(`**General Mixed Sentiment:** The user expresses mixed emotions. Address both positive and negative aspects carefully, offering balanced support.`);
         } else { // Neutral or undefined
