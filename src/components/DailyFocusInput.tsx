@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSupabaseSession, supabase } from '@/utils/supabase';
 import { User } from '@supabase/supabase-js';
-import { Check, XCircle } from 'lucide-react'; // Added Check and XCircle for potential use in UI feedback
+import { Check, XCircle } from 'lucide-react';
 
 // Define the interface for the daily focus data returned from Supabase
 interface DailyFocus {
@@ -37,12 +37,12 @@ const DailyFocusInput: React.FC = () => {
         .eq('date', today)
         .single();
 
-      if (error && error.code !== 'PGRST116') {
+      if (error && error.code !== 'PGRST116') { // PGRST116 means no rows found, which is okay
         throw error;
       }
 
       if (data) {
-        setFocus(data.focus_text || '');
+        setFocus(data.focus_text);
         setCurrentFocus(data);
       } else {
         setFocus('');
@@ -54,21 +54,21 @@ const DailyFocusInput: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []); // useCallback with empty dependency array because user is passed as argument
+  }, []);
 
   useEffect(() => {
     if (session?.user && !loading) {
       fetchDailyFocus(session.user);
     }
-  }, [session, loading, fetchDailyFocus]); // Add fetchDailyFocus to dependencies
+  }, [session, loading, fetchDailyFocus]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!session?.user) {
-      setError('You must be logged in to set your daily focus.');
+      setError('You must be logged in to set a daily focus.');
       return;
     }
-    if (focus.trim() === '') {
+    if (!focus.trim()) {
       setError('Daily focus cannot be empty.');
       return;
     }
@@ -79,38 +79,38 @@ const DailyFocusInput: React.FC = () => {
     setShowConfirmation(false);
 
     try {
-      const response = await fetch('/api/set-daily-focus', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ focusText: focus }),
-      });
+      const today = new Date().toISOString().split('T')[0];
+      const { data, error } = await supabase
+        .from('daily_focus')
+        .upsert({
+          user_id: session.user.id,
+          date: today,
+          focus_text: focus.trim(),
+        })
+        .select()
+        .single();
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to set daily focus.');
+      if (error) {
+        throw error;
       }
 
-      setMessage(result.message);
-      setShowConfirmation(true); // Show checkmark
-      setTimeout(() => setShowConfirmation(false), 2000); // Hide after 2 seconds
+      setMessage('Focus saved successfully!');
+      setShowConfirmation(true);
+      setTimeout(() => setShowConfirmation(false), 2000); // Hide checkmark after 2 seconds
 
-      if (session.user) {
-         fetchDailyFocus(session.user); // Re-fetch to update current focus and ensure consistency
-      }
+      // Update the state with the new data
+      setCurrentFocus(data as DailyFocus);
 
     } catch (err: any) {
-      console.error('Error setting daily focus:', err.message);
-      setError(err.message || 'An error occurred while setting daily focus.');
+      console.error('Error saving daily focus:', err.message);
+      setError('An error occurred while saving your focus.');
     } finally {
       setIsLoading(false);
     }
   };
 
   if (loading) {
-    return <p className="text-center text-gray-400">Loading focus...</p>;
+    return <p className="text-center text-gray-400">Loading daily focus...</p>;
   }
 
   if (!session) {
@@ -138,7 +138,6 @@ const DailyFocusInput: React.FC = () => {
               **Current Focus for Today:** "
               <span className="font-medium text-blue-400">{currentFocus.focus_text}</span>"
             </span>
-            {/* Optional: Clear focus button if needed, but upsert handles updates */}
           </p>
         )}
         <textarea
@@ -153,7 +152,7 @@ const DailyFocusInput: React.FC = () => {
         <button
           type="submit"
           className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 transition duration-150 ease-in-out"
-          disabled={isLoading}
+          disabled={isLoading || !focus.trim()}
         >
           {isLoading ? 'Saving...' : currentFocus ? 'Update Focus' : 'Set Focus'}
         </button>

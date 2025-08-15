@@ -112,17 +112,16 @@ export default function Home() {
   const [showFloatingMenu, setShowFloatingMenu] = useState(false); // New state for floating menu
 
   // User and personality profile states
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [displayUserName, setDisplayUserName] = useState<string | null>(null);
-  const [chatbotUserName, setChatbotUserName,
+  const [userEmail, setUserEmail,
   ] = useState<string | null>(null);
+  const [displayUserName, setDisplayUserName] = useState<string | null>(null);
+  const [chatbotUserName, setChatbotUserName] = useState<string | null>(null);
   const [userPersonalityProfile, setUserPersonalityProfile] = useState<PersonalityProfile | null>(null);
   const [dailyTokenUsage, setDailyTokenUsage] = useState<number>(0); // New state for daily token usage
 
   // Chat session management states
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]
-  );
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [showSessionOptionsForId, setShowSessionOptionsForId] = useState<string | null>(null); // For chat session dropdown menu
 
   // Feature-specific UI toggles
@@ -196,7 +195,7 @@ export default function Home() {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'; // Reset height to recalculate
       const lineHeight = parseFloat(getComputedStyle(textareaRef.current).lineHeight);
-      const maxHeight = lineHeight * 5; // Max 5 lines
+      const maxHeight = lineHeight * 6; // Max 6 lines as per user request
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, maxHeight)}px`;
       if (textareaRef.current.scrollHeight > maxHeight) {
         textareaRef.current.style.overflowY = 'auto'; // Enable scroll if content exceeds max height
@@ -901,7 +900,7 @@ export default function Home() {
           const userId = session?.user?.id;
 
           if (!userId) {
-            console.warn("User ID not available, cannot delete chat session.");
+          console.warn("User ID not available, cannot delete chat session.");
             displayInAppMessage("Error: User not logged in. Cannot delete chat session.");
             return;
           }
@@ -1094,49 +1093,49 @@ export default function Home() {
         {/* Sidebar Toggle Button (Top) */}
         <button
           onClick={() => setIsSidebarOpen((prev) => !prev)}
-          className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors mb-6"
+          className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors mb-3"
           aria-label="Toggle sidebar"
         >
-          <MenuIcon size={24} />
+          <MenuIcon size={20} />
         </button>
 
         {/* New Chat, Search, and Library icons */}
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3">
           <button
             onClick={() => handleNewChat(false)}
-            className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
             aria-label="New chat"
             title="New Chat"
           >
-            <PenSquare size={24} />
+            <PenSquare size={20} />
           </button>
           <button
             onClick={() => console.log("Search chats")}
-            className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
             aria-label="Search chats"
             title="Search Chats"
           >
-            <Search size={24} />
+            <Search size={20} />
           </button>
           <button
             onClick={() => console.log("Open library")}
-            className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
             aria-label="Open library"
             title="Library"
           >
-            <Library size={24} />
+            <Library size={20} />
           </button>
         </div>
 
         {/* User profile icon at the bottom of the fixed toolbar */}
         {/* Clicking this button now simply opens the main sidebar */}
-        <div className="mt-auto relative">
+        <div className="mt-auto pt-4 relative">
             <button
                 onClick={() => setIsSidebarOpen(true)}
-                className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-600 text-white font-bold text-sm hover:ring-2 ring-blue-500 transition-all"
+                className="w-9 h-9 p-2 flex items-center justify-center rounded-full bg-gray-600 text-white font-bold text-sm hover:ring-2 ring-gray-500 transition-all"
                 title={displayUserName || "User Profile"}
             >
-                {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={18} />}
+                {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={20} />}
             </button>
         </div>
       </div>
@@ -1152,10 +1151,10 @@ export default function Home() {
            <span className="text-gray-400 text-lg font-bold">Quirra</span>
            <button
              onClick={() => setIsSidebarOpen(false)}
-             className="p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+             className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
              aria-label="Close sidebar"
            >
-             <MenuIcon size={24} />
+             <MenuIcon size={20} />
            </button>
          </div>
 
@@ -1200,17 +1199,17 @@ export default function Home() {
                         : "text-gray-300 hover:bg-gray-800 hover:text-white"
                     }`}
                   >
-                    <PenSquare size={16} /> {session.title}
+                    <PenSquare size={20} /> {session.title}
                   </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation(); // Prevent button click from closing sidebar
                       setShowSessionOptionsForId(showSessionOptionsForId === session.id ? null : session.id);
                     }}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded-full text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 p-2 rounded-full text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
                     title="More options"
                   >
-                    <MoreVertical size={16} />
+                    <MoreVertical size={20} />
                   </button>
                   {showSessionOptionsForId === session.id && (
                     <div
@@ -1224,7 +1223,7 @@ export default function Home() {
                         }}
                         className="flex items-center gap-1 px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-left"
                       >
-                        <Edit size={14} /> Rename
+                        <Edit size={16} /> Rename
                       </button>
                       <button
                         onClick={(e) => {
@@ -1233,7 +1232,7 @@ export default function Home() {
                         }}
                         className="flex items-center gap-1 px-3 py-2 text-xs text-red-400 hover:bg-red-700 hover:text-white transition-colors w-full text-left"
                       >
-                        <Eraser size={14} /> Delete
+                        <Eraser size={16} /> Delete
                       </button>
                     </div>
                   )}
@@ -1253,8 +1252,8 @@ export default function Home() {
                     className="flex items-center w-full gap-3 text-left p-2 rounded-lg hover:bg-gray-800 transition-colors text-gray-300"
                 >
                     {/* User avatar/initials */}
-                    <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
-                        {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={18} />}
+                    <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white font-bold text-sm">
+                        {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={20} />}
                     </div>
                     {/* Username or "User" fallback */}
                     <span className="flex-1 text-sm">{displayUserName || "User"}</span>
@@ -1276,14 +1275,14 @@ export default function Home() {
                             }}
                             className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                         >
-                            <Settings size={16} />
+                            <Settings size={20} />
                             <span>Settings</span>
                         </button>
                         <button
                             onClick={handleLogout}
                             className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-red-400 hover:bg-red-700 hover:text-white rounded-b-lg transition-colors"
                         >
-                            <LogOut size={16} />
+                            <LogOut size={20} />
                             <span>Sign Out</span>
                         </button>
                     </div>
@@ -1385,8 +1384,8 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => setShowFloatingMenu(!showFloatingMenu)}
-                    className={`w-10 h-10 flex items-center justify-center rounded-full transition-all duration-300 ${
-                      showFloatingMenu ? 'bg-blue-600 rotate-45' : 'bg-[#1a213a] hover:bg-[#2a304e] rotate-0'
+                    className={`w-9 h-9 p-2 flex items-center justify-center rounded-full transition-all duration-300 ${
+                      showFloatingMenu ? 'bg-[#2a304e]' : 'bg-[#1a213a] hover:bg-[#2a304e]'
                     }`}
                     aria-label="Add more options"
                   >
@@ -1401,7 +1400,7 @@ export default function Home() {
                         }}
                         className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                       >
-                        <Upload size={16} /> Upload file
+                        <Upload size={20} /> Upload file
                       </button>
                       <button
                         onClick={() => {
@@ -1412,7 +1411,7 @@ export default function Home() {
                         }}
                         className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                       >
-                        <Target size={16} /> Set Daily Focus
+                        <Target size={20} /> Set Daily Focus
                       </button>
                       <button
                         onClick={() => {
@@ -1423,7 +1422,7 @@ export default function Home() {
                         }}
                         className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                       >
-                        <Target size={16} /> Set Goal
+                        <Target size={20} /> Set Goal
                       </button>
                       <button
                         onClick={() => {
@@ -1434,7 +1433,7 @@ export default function Home() {
                         }}
                         className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                       >
-                        <Smile size={16} /> Log Mood
+                        <Smile size={20} /> Log Mood
                       </button>
                     </div>
                   )}
@@ -1453,7 +1452,7 @@ export default function Home() {
                 {(input.trim() || isLoading) && (
                   <button
                     type="submit"
-                    className="absolute bottom-2 right-2 flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+                    className="absolute bottom-2 right-2 flex items-center justify-center w-9 h-9 p-2 rounded-full bg-gray-700 text-white hover:bg-gray-600 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
                     disabled={!input.trim() || isLoading}
                     aria-label="Send message"
                   >
@@ -1496,7 +1495,7 @@ export default function Home() {
                   {/* Conditional rendering for loading state or actual message content */}
                   {msg.role === "assistant" && msg.content === "" && (isLoading || isRegenerating) ? (
                     <div className="flex items-center gap-2 py-1">
-                      <Loader2 className="animate-spin text-blue-400" size={20} />
+                      <Loader2 className="animate-spin text-gray-400" size={20} />
                       <span className="animate-typing-dots text-lg text-gray-300">Quirra is thinking...</span>
                     </div>
                   ) : (
@@ -1569,26 +1568,26 @@ export default function Home() {
                       </ReactMarkdown>
                       {/* Action buttons for messages (copy, edit) */}
                       {msg.content !== "" && (
-                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity duration-200">
+                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 flex gap-2 transition-opacity duration-200">
                           {msg.role === 'user' && (
                             <button
-                              className="p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
+                              className="w-9 h-9 p-2 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
                               onClick={() => handleEditMessage(msg.id)}
                               title="Edit message"
                               disabled={isLoading}
                             >
-                              <Edit size={16} />
+                              <Edit size={20} />
                             </button>
                           )}
                           <button
-                            className="p-1 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
+                            className="w-9 h-9 p-2 rounded-md bg-gray-700 text-gray-300 hover:text-white hover:bg-gray-600 transition-colors"
                             onClick={() => copyToClipboard(msg.content, `msg-${msg.id}`)}
                             title="Copy message"
                           >
                             {copiedMessageId === `msg-${msg.id}` ? (
-                              <Check size={16} className="text-green-400" />
+                              <Check size={20} className="text-green-400" />
                             ) : (
-                              <Copy size={16} />
+                              <Copy size={20} />
                             )}
                           </button>
                         </div>
@@ -1623,8 +1622,8 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowFloatingMenu(!showFloatingMenu)}
-                  className={`w-10 h-10 flex items-center justify-center rounded-full transition-all duration-300 ${
-                    showFloatingMenu ? 'bg-blue-600 rotate-45' : 'bg-[#1a213a] hover:bg-[#2a304e] rotate-0'
+                  className={`w-9 h-9 p-2 flex items-center justify-center rounded-full transition-all duration-300 ${
+                    showFloatingMenu ? 'bg-[#2a304e]' : 'bg-[#1a213a] hover:bg-[#2a304e]'
                   }`}
                   aria-label="Add more options"
                 >
@@ -1639,7 +1638,7 @@ export default function Home() {
                       }}
                       className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                     >
-                      <Upload size={16} /> Upload file
+                      <Upload size={20} /> Upload file
                     </button>
                     <button
                       onClick={() => {
@@ -1650,7 +1649,7 @@ export default function Home() {
                       }}
                       className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                     >
-                      <Target size={16} /> Set Daily Focus
+                      <Target size={20} /> Set Daily Focus
                     </button>
                     <button
                       onClick={() => {
@@ -1661,7 +1660,7 @@ export default function Home() {
                       }}
                       className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                     >
-                      <Target size={16} /> Set Goal
+                      <Target size={20} /> Set Goal
                     </button>
                     <button
                       onClick={() => {
@@ -1672,7 +1671,7 @@ export default function Home() {
                       }}
                       className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
                     >
-                      <Smile size={16} /> Log Mood
+                      <Smile size={20} /> Log Mood
                     </button>
                   </div>
                 )}
@@ -1693,7 +1692,7 @@ export default function Home() {
                 <button
                   type="submit"
                   // Adjusted classes for send button to a horizontal "pill" shape
-                  className="absolute bottom-2 right-2 flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  className="absolute bottom-2 right-2 flex items-center justify-center w-9 h-9 p-2 rounded-full bg-gray-700 text-white hover:bg-gray-600 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
                   disabled={!input.trim() || isLoading}
                   aria-label="Send message"
                 >
