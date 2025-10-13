@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
 
 const tabs = [
@@ -13,52 +13,6 @@ const tabs = [
   "Security",
   "Account",
 ];
-
-// Example content components for each tab
-const TabContent: Record<string, React.ReactNode> = {
-  General: (
-    <div>
-      <p>Here you can adjust general settings.</p>
-      <p>Add toggles, preferences, and other general options here.</p>
-    </div>
-  ),
-  Notification: (
-    <div>
-      <p>Manage your notifications here.</p>
-      <p>Push notifications, email alerts, and other notification options.</p>
-    </div>
-  ),
-  Personalization: (
-    <div>
-      <p>Customize your experience.</p>
-      <p>Theme, layout, and personalization settings go here.</p>
-    </div>
-  ),
-  "Apps & Connects": (
-    <div>
-      <p>Manage connected apps and integrations.</p>
-      <p>Here you can authorize or remove third-party apps.</p>
-    </div>
-  ),
-  "Data Control": (
-    <div>
-      <p>Control your data privacy.</p>
-      <p>Options for export, deletion, and permissions.</p>
-    </div>
-  ),
-  Security: (
-    <div>
-      <p>Security settings for your account.</p>
-      <p>Change passwords, enable 2FA, and manage sessions.</p>
-    </div>
-  ),
-  Account: (
-    <div>
-      <p>Account details and preferences.</p>
-      <p>Manage email, username, and subscription settings.</p>
-    </div>
-  ),
-};
 
 export default function SettingsDropdown({ onClose }: { onClose?: () => void }) {
   const [activeTab, setActiveTab] = useState("General");
@@ -109,9 +63,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
       >
         {/* === Sidebar Tabs === */}
         <aside className="md:w-52 flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-5
-                         bg-[linear-gradient(180deg,rgba(0,212,255,0.05)_0%,rgba(142,45,226,0.05)_100%)]
-                         flex flex-col"
-        >
+                         bg-[linear-gradient(180deg,rgba(0,212,255,0.05)_0%,rgba(142,45,226,0.05)_100%)]">
           <div className="flex items-center justify-between md:justify-start md:mb-5">
             <h1 className="text-lg font-semibold text-white tracking-wide">Settings</h1>
             <button
@@ -122,7 +74,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
             </button>
           </div>
 
-          <nav className="flex md:flex-col gap-2 overflow-x-auto md:overflow-y-auto no-scrollbar flex-1">
+          <nav className="flex md:flex-col gap-2 overflow-x-auto md:overflow-visible no-scrollbar">
             {tabs.map((tab) => (
               <button
                 key={tab}
@@ -140,7 +92,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
           </nav>
         </aside>
 
-        {/* === Main Content Area (Scrollable) === */}
+        {/* === Main Content Area (Empty For Now) === */}
         <main className="flex-1 relative p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
           <button
             onClick={onClose}
@@ -153,8 +105,8 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
             {activeTab}
           </h2>
 
-          <div className="text-gray-400 text-sm mt-4">
-            {TabContent[activeTab]}
+          <div className="text-gray-400 text-sm italic mt-10 text-center">
+            Content for <span className="text-cyan-400">{activeTab}</span> will appear here.
           </div>
         </main>
       </motion.div>

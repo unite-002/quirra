@@ -1940,8 +1940,7 @@ const handlePhotoChange = (files: FileList) => {
 
 </div>
 </div>
- 
- {/* ✅ Detached Global Settings Dropdown */}
+
 {showSettingsDropdown && (
   <SettingsDropdown
     onClose={() => setShowSettingsDropdown(false)}
@@ -1951,6 +1950,7 @@ const handlePhotoChange = (files: FileList) => {
     currentTheme={theme}
   />
 )}
+
 
      
 
