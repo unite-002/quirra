@@ -45,6 +45,15 @@ import { PersonalityOnboarding } from "@/components/PersonalityOnboarding";
 import DailyFocusInput from '@/components/DailyFocusInput';
 import MoodLogger from '@/components/MoodLogger';
 import { GoalSetting } from '@/components/GoalSetting'; // Import GoalSetting component
+import { ThinkingOrb } from "@/components/ThinkingOrb";
+import ChatInput from "@/components/ChatInput";
+import QuirraBackground from "@/components/QuirraBackground";
+import QuirraSidePanelBackground from "@/components/QuirraSidePanelBackground";
+import QuirraSidebarBackground from "@/components/QuirraSidebarBackground";
+import QuirraSearchDropdown from "@/components/QuirraSearchDropdown";
+import LibraryPage from "@/components/QuirraLibrary/LibraryPage"
+import SettingsDropdown from "@/components/SettingsDropdown";
+import ProfileDropdown from "@/components/ProfileDropdown";
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -155,8 +164,9 @@ useEffect(() => {
   }
 }, [messages]);
 
+
   // MAIN VIEW: which main area is visible
-  const [activeMainView, setActiveMainView] = useState<'chat' | 'journey'>('chat');
+  const [activeMainView, setActiveMainView] = useState<'chat' | 'journey' | 'library'>('chat');
 
   // User and personality profile states
   const [userEmail, setUserEmail,
@@ -179,10 +189,41 @@ useEffect(() => {
   // Message interaction states
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null); // For copy-to-clipboard feedback
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null); // For editing user messages
-  const [showUserProfileOptions, setShowUserProfileOptions] = useState<boolean>(false); // State for user profile dropdown
-  
+  const [showUserProfileOptions, setShowUserProfileOptions] = useState<boolean>(false); // State for user profile dropdown 
+
   // 🟢 Track votes for assistant messages
   const [messageVotes, setMessageVotes] = useState<{ [id: string]: "up" | "down" | null }>({});
+
+ // === SETTINGS DROPDOWN HELPERS ===
+
+// Clears all chat history
+const handleDeleteChatHistory = useCallback(async () => {
+  try {
+    const response = await fetch("/api/delete-all-history", { method: "POST" });
+    if (!response.ok) throw new Error("Failed to delete chat history");
+
+    setChatSessions([]);
+    setMessages([]);
+    setActiveChatSessionId(null);
+    setIsChatEmpty(true);
+
+    toast.success("All chat history deleted!");
+  } catch (err) {
+    console.error("Error deleting chat history:", err);
+    toast.error("Failed to delete chat history");
+  }
+}, []);
+
+// Theme toggle state
+const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+const toggleTheme = useCallback(() => {
+  const newTheme = theme === "dark" ? "light" : "dark";
+  setTheme(newTheme);
+  document.documentElement.classList.toggle("dark", newTheme === "dark");
+  toast.success(`Switched to ${newTheme} mode`);
+}, [theme]);
+
   
   // --- Reusable IconButton for toolbar actions ---
   type IconButtonProps = {
@@ -410,6 +451,19 @@ const JourneyPage: React.FC<{
   const sessionOptionsRef = useRef<HTMLDivElement>(null); // Ref for closing session options on outside click
   const floatingMenuRef = useRef<HTMLDivElement>(null); // Ref for floating menu to close on outside click
   const fileInputRef = useRef<HTMLInputElement>(null); // Ref for hidden file input
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showSidebarProfileOptions, setShowSidebarProfileOptions] = useState(false);
+  const [showFloatingProfileOptions, setShowFloatingProfileOptions] = useState(false);
+
+// Controls visibility of the Settings dropdown
+const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+
+ 
+  useEffect(() => {
+    // Auto-scroll to bottom whenever new messages are added
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
 
   // 🟢 Split user profile dropdown into two separate refs
   const floatingUserProfileRef = useRef<HTMLDivElement>(null);  // For avatar + floating dropdown (when sidebar is closed)
@@ -569,7 +623,7 @@ useEffect(() => {
     };
     tryScroll();
 
-    // 👇 shorter flash, like ChatGPT (~0.8s)
+    // 👇 shorter flash, like ChatGPT 
     setTimeout(() => setHighlightedMessageId(null), 800);
   }
 };
@@ -1295,54 +1349,67 @@ const handleNewChat = useCallback(async () => {
   setIsSidebarOpen,
 ]);
 
-  // Handler for switching to a different chat session
-  const handleSwitchChatSession = useCallback(async (sessionId: string) => {
-    if (isLoading) {
-      displayInAppMessage("Please wait for the current response to complete before switching chats.");
-      return;
-    }
-    if (sessionId === activeChatSessionId) { // Do nothing if already on this session
-      setIsSidebarOpen(false);
-      return;
-    }
+const handleOpenSidebarProfile = () => {
+  setShowSidebarProfileOptions(prev => !prev);
+  setShowFloatingProfileOptions(false);
+};
 
+const handleOpenFloatingProfile = () => {
+  setShowFloatingProfileOptions(prev => !prev);
+  setShowSidebarProfileOptions(false);
+};
+
+ // Handler for switching to a different chat session
+const handleSwitchChatSession = useCallback(async (sessionId: string) => {
+  if (isLoading) {
+    displayInAppMessage("Please wait for the current response to complete before switching chats.");
+    return;
+  }
+
+  if (sessionId === activeChatSessionId) {
+    setIsSidebarOpen(false);
+    return;
+  }
+
+  try {
     setIsLoading(true);
-    setMessages([]); // Clear current messages
-    setActiveChatSessionId(sessionId); // Set new active session
-    setEditingMessageId(null); // Clear editing state
-    setIsChatEmpty(true); // Assume empty until messages are loaded
-    // Hide all personalization tools when switching chats
+    setMessages([]);
+    setActiveChatSessionId(sessionId);
+    setEditingMessageId(null);
+    setIsChatEmpty(true);
+
     setShowDailyFocusInput(false);
     setShowMoodLogger(false);
     setShowGoalSetting(false);
 
+    // Get messages for this session
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, role, content, created_at") // select only what you need
+      .eq("chat_session_id", sessionId)
+      .order("created_at", { ascending: true });
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const userId = session?.user?.id;
-
-    if (userId) {
-      const { data, error: fetchError } = await supabase
-        .from("messages")
-        .select("id, role, content, emotion_score, personality_profile, created_at, chat_session_id")
-        .eq('user_id', userId)
-        .eq('chat_session_id', sessionId)
-        .order("created_at", { ascending: true }); // Order by timestamp
-
-      if (fetchError) {
-        console.error(`❌ Failed to load history for session ${sessionId}:`, fetchError.message);
-        displayInAppMessage("Failed to load chat history. Please try again.");
-      } else {
-        setMessages(data as ChatMessage[]); // Load messages for the selected session
-        setIsChatEmpty(data.length === 0); // Update based on loaded messages
-      }
+    if (error) {
+      console.error(`❌ Failed to load history for session ${sessionId}:`, error.message);
+      displayInAppMessage("Failed to load chat history. Please try again.");
+    } else if (data && data.length > 0) {
+      console.log("✅ Loaded messages:", data);
+      setMessages(data as ChatMessage[]);
+      setIsChatEmpty(false);
     } else {
-      console.warn("User ID not available, cannot load chat history.");
-      displayInAppMessage("Not logged in. Cannot load chat history.");
+      console.warn("⚠️ No messages found for session:", sessionId);
+      setIsChatEmpty(true);
     }
+  } catch (err: any) {
+    console.error("❌ Unexpected error while switching chat session:", err.message);
+    displayInAppMessage("An error occurred while loading this chat. Please try again.");
+  } finally {
     setIsLoading(false);
-    setIsSidebarOpen(false); // Close sidebar after switching
-    setShowSessionOptionsForId(null); // Hide options menu
-  }, [isLoading, activeChatSessionId, displayInAppMessage]); // Dependencies for useCallback
+    setIsSidebarOpen(false);
+    setShowSessionOptionsForId(null);
+  }
+}, [isLoading, activeChatSessionId, displayInAppMessage]);
+
 
   // Function to rename a chat session (uses custom modal)
   const renameChatSession = useCallback(async (sessionId: string, currentTitle: string) => {
@@ -1469,16 +1536,19 @@ const handleNewChat = useCallback(async () => {
     });
   }, [isLoading, activeChatSessionId, createNewChatSession, displayInAppMessage]); // Dependencies for useCallback
 
-  // Handler for user logout
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("❌ Error signing out:", error.message);
-      displayInAppMessage(`Error signing out: ${error.message}`);
-      return;
-    }
-    router.push("/sign-out"); // Redirect to sign-out page
-  };
+ // Handler for user logout
+const handleLogout = async () => {
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    console.error("❌ Error signing out:", error.message);
+    displayInAppMessage(`Error signing out: ${error.message}`);
+    return;
+  }
+
+  toast.success("Signed out successfully!");
+  setTimeout(() => router.push("/sign-in"), 1000);
+};
+
 
   // Function to copy text to clipboard
   const copyToClipboard = async (text: string, messageId: string) => {
@@ -1557,6 +1627,13 @@ const removePendingFile = (index: number) => {
   setPendingFiles((prev) => prev.filter((_, i) => i !== index));
 };
 
+// Handle photo uploads (used by ChatInput)
+const handlePhotoChange = (files: FileList) => {
+  console.log("📸 Photo(s) selected:", files);
+  const newPhotos = Array.from(files);
+  setPendingFiles((prev) => [...prev, ...newPhotos]);
+};
+
   // Show loading scconst handleSendMessage = async () => {
   if (isInitialLoading) {
     return (
@@ -1578,10 +1655,11 @@ const removePendingFile = (index: number) => {
 
   // Main chat application UI
   return (
-    <div className="flex min-h-screen bg-[#0A0B1A] text-white">
+    <div className="relative flex min-h-screen text-white overflow-hidden">
+      <QuirraBackground isActive={isLoading} />
       {/* Custom Modal Overlay */}
       {modalState.isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-[100]">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
           <div className="bg-[#1a213a] p-6 rounded-lg shadow-xl border border-gray-800 w-full max-w-md mx-4 relative animate-scaleIn">
             <button
               onClick={() => modalState.onCancel?.()}
@@ -1623,424 +1701,293 @@ const removePendingFile = (index: number) => {
         </div>
       )}
 
-      {/* Fixed Vertical Toolbar (Left Edge of Chat Page - Like Gemini) */}
-      <div
-        className={`fixed inset-y-0 left-0 w-16 bg-[#0A0B1A] border-r border-gray-800 z-50 flex flex-col items-center py-4 transition-transform duration-300 ease-in-out ${
-          isSidebarOpen ? '-translate-x-full' : 'translate-x-0'
-        }`}
-      >
-        {/* Sidebar Toggle Button (Top) */}
-        <button
-          onClick={() => setIsSidebarOpen((prev) => !prev)}
-          className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors mb-3"
-          aria-label="Toggle sidebar"
-        >
-          <MenuIcon size={20} />
-        </button>
+{/* 🧠 Ultra-Compact Side Panel */}
+<div
+  className={`fixed inset-y-0 left-0 z-[30] flex flex-col items-center overflow-visible bg-[#0B0C15] border-r border-gray-800 transition-all duration-300 ease-in-out ${
+    isSidebarOpen ? "w-56" : "w-[56px]"
+  }`}
+>
+  {/* === Intelligent Side Panel Background === */}
+  <div className="absolute inset-0 z-0 pointer-events-none">
+    <div className="absolute inset-0 bg-[#05060F]/90" />
+    <QuirraSidePanelBackground isActive={isLoading} />
+  </div>
 
-        {/* New Chat, Search, and Library icons */}
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={() => { handleNewChat(); setActiveMainView('chat'); }}
-            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-            aria-label="New chat"
-            title="New Chat"
-          >
-            <PenSquare size={20} />
-          </button>
-          <button
-            onClick={() => setIsSearchOpen(true)}
-            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-            aria-label="Search chats"
-            title="Search Chats"
-          >
-            <Search size={20} />
-          </button>
-          <button
-            onClick={() => console.log("Open library")}
-            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-            aria-label="Open library"
-            title="Library"
-          >
-            <Library size={20} />
-          </button>
-          <button
-            onClick={() => setActiveMainView('journey')}
-            className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-            aria-label="My Journey"
-            title="My Journey"
-          >
-            <JourneyIcon state={userJourneyState} />
-          </button>
-        </div>
+  {/* === Sidebar Content === */}
+  <div className="relative z-10 flex flex-col flex-1 items-center py-4 text-gray-300">
 
-        {/* User profile button + floating dropdown when sidebar is closed */}
-        <div className="mt-auto pt-4 relative" ref={floatingUserProfileRef}>
-          <button
-            onClick={() => {
-          if (isSidebarOpen) {
-            // Toggle sidebar dropdown if sidebar is open
-            setShowUserProfileOptions(prev => !prev);
-          } else {
-            // Toggle floating dropdown if sidebar is closed
-            setShowUserProfileOptions(prev => !prev);
-          }
+    {/* 🔹 Sidebar Toggle Button (Top) */}
+    <button
+      onClick={() => setIsSidebarOpen((prev) => !prev)}
+      className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-800 text-gray-300 hover:text-white transition-colors mb-5"
+      title="Toggle Sidebar"
+    >
+      <MenuIcon size={18} />
+    </button>
+
+    {/* === Action Icons === */}
+    <div className="flex flex-col gap-3">
+      <button
+        onClick={() => {
+          handleNewChat();
+          setActiveMainView("chat");
         }}
-        className="w-9 h-9 p-2 flex items-center justify-center rounded-full bg-gray-600 text-white font-bold text-sm hover:ring-2 ring-gray-500 transition-all"
-        title={displayUserName || "User Profile"}
+        className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-800 text-gray-300 hover:text-white transition-colors"
+        title="New Chat"
       >
-        {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={20} />}
+        <PenSquare size={17} />
       </button>
 
-      {/* Floating dropdown (only when sidebar is closed) */}
-      {!isSidebarOpen && showUserProfileOptions && (
-        <div
-          className="absolute bottom-12 left-0 w-56 bg-[#2a304e] border border-gray-700 rounded-lg shadow-lg z-50 animate-slideUpAndFade"
-        > 
-          <div className="px-4 py-2 text-sm text-gray-300 border-b border-gray-700">
-            <span className="font-semibold block mb-1">Daily Usage</span>
-            <div className="flex justify-between text-xs">
-              <span>Tokens Used:</span>
-              <span className="font-bold text-white">
-                {dailyTokenUsage} / {DAILY_TOKEN_LIMIT_CLIENT}
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              router.push("/settings");
-              setShowUserProfileOptions(false);
-            }}
-              className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-            >
-              <Settings size={20} />
-              <span>Settings</span>
-            </button>
-
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-red-400 hover:bg-red-700 hover:text-white rounded-b-lg transition-colors"
-            >
-              <LogOut size={20} />
-              <span>Sign Out</span>
-            </button>
-          </div>
-        )}
-      </div>
-    </div>  {/* ✅ Close the fixed toolbar div here!! */}
-
-      {/* Sidebar (slides from left and covers the fixed toolbar) */}
-      <div
-        className={`fixed inset-y-0 z-40 transform bg-[#1a213a] border-r border-gray-800 flex flex-col transition-transform duration-300 ease-in-out ${
-          isSidebarOpen ? "translate-x-0 w-full md:w-64" : "-translate-x-full"
-        }`}
+      <button
+        onClick={() => setIsSearchOpen(true)}
+        className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-800 text-gray-300 hover:text-white transition-colors"
+        title="Search"
       >
-         {/* Sidebar Header with Quirra text and Toggle Button */}
-         <div className="p-4 flex items-center justify-between">
-           <span className="text-gray-400 text-lg font-bold">Quirra</span>
-           <button
-             onClick={() => setIsSidebarOpen(false)}
-             className="w-9 h-9 p-2 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-             aria-label="Close sidebar"
-           >
-             <MenuIcon size={20} />
-           </button>
-         </div>
+        <Search size={17} />
+      </button>
+
+      <button
+        onClick={() => setActiveMainView("library")}
+        className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-800 text-gray-300 hover:text-white transition-colors"   
+        title="Library"
+      >
+        <Library size={17} />
+      </button>
+
+      <button
+        onClick={() => setActiveMainView("journey")}
+        className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-800 text-gray-300 hover:text-white transition-colors"
+        title="My Journey"
+      >
+        <JourneyIcon state={userJourneyState} />
+      </button>
+    </div>
+
+    {/* Spacer */}
+    <div className="flex-1" />
+
+  
+  {/* === Profile Button === */}
+<div className="pb-4" ref={floatingUserProfileRef}>
+  <ProfileDropdown
+    displayUserName={displayUserName}
+    dailyTokenUsage={dailyTokenUsage}
+    dailyTokenLimit={DAILY_TOKEN_LIMIT_CLIENT}
+    isOpen={showFloatingProfileOptions}
+    onToggle={() => setShowFloatingProfileOptions(prev => !prev)}
+    onSettings={() => {
+      setShowSettingsDropdown(true);
+      setShowFloatingProfileOptions(false);
+      setShowSidebarProfileOptions(false);
+    }}
+    onSignOut={() => {
+      handleLogout();
+      setShowFloatingProfileOptions(false);
+    }}
+    mode="floating"
+  />
+</div>
+</div>
+ </div>
 
 
-        {/* New Chat, Search, Library buttons */}
-        <div className="p-2 flex flex-col gap-1 border-b border-gray-800">
-          <button
-            onClick={() => handleNewChat()}
-            className="flex items-center gap-4 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-sm"
-          >
-            <PenSquare size={20} /> New Chat
-          </button>
-          <button
-            onClick={() => setIsSearchOpen(true)}
-            className="flex items-center gap-4 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-sm"
-          >
-            <Search size={20} /> Search Chats
-          </button>
-          <button
-            onClick={() => console.log("Open library")}
-            className="flex items-center gap-4 px-3 py-2 rounded-lg text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-sm"
-          >
-            <Library size={20} /> Library
-          </button>
-        </div>
+ 
+{/* === QUIRRA SIDEBAR === */}
+<div
+  className={`fixed inset-y-0 left-0 z-40 transform flex flex-col overflow-hidden transition-transform duration-300 ease-in-out ${
+    isSidebarOpen ? "translate-x-0 w-64" : "-translate-x-full"
+  }`}
+>
+  {/* 🌌 Background */}
+  <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-[#05060E] to-[#0B0C1A]" />
+  <div className="absolute inset-y-0 right-[12%] w-[45%] blur-[90px] opacity-[0.15] bg-[linear-gradient(to_left,rgba(0,224,255,0.5),transparent)] pointer-events-none" />
+  <div className="absolute right-0 top-0 w-[3px] h-full bg-[linear-gradient(to_left,#00FFFF55,transparent)] blur-[5px] pointer-events-none" />
 
-        {/* Recent Chats Section */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 border-b border-gray-800">
-          <h3 className="text-gray-400 text-xs font-semibold mb-2 px-2">Recent Chats</h3>
-          {chatSessions.length > 0 ? (
-            <div className="flex flex-col gap-1">
-              {chatSessions.map((session) => (
-                <div key={session.id} className="relative group">
-                  <button
-                    onClick={() => {
-                      handleSwitchChatSession(session.id);
-                      setShowSessionOptionsForId(null);
-                    }}
-                    className={`flex items-center gap-2 px-3 py-2 pr-10 rounded-lg text-left transition-colors text-sm w-full overflow-hidden text-ellipsis whitespace-nowrap ${
-                      activeChatSessionId === session.id
-                        ? "bg-gray-700 text-gray-200 font-semibold"
-                        : "text-gray-300 hover:bg-gray-800 hover:text-white"
-                    }`}
-                  >
-                    <PenSquare size={20} /> {session.title}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation(); // Prevent button click from closing sidebar
-                      setShowSessionOptionsForId(showSessionOptionsForId === session.id ? null : session.id);
-                    }}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 p-2 rounded-full text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-                    title="More options"
-                  >
-                    <MoreVertical size={20} />
-                  </button>
-                  {showSessionOptionsForId === session.id && (
-                    <div
-                      ref={sessionOptionsRef}
-                      className="absolute right-6 top-1/2 -translate-y-1/2 bg-[#2a304e] border border-gray-800 rounded-md shadow-lg z-10 flex flex-col overflow-hidden"
-                    >
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          renameChatSession(session.id, session.title);
-                        }}
-                        className="flex items-center gap-1 px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors w-full text-left"
-                      >
-                        <Edit size={16} /> Rename
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteChatSession(session.id);
-                        }}
-                        className="flex items-center gap-1 px-3 py-2 text-xs text-red-400 hover:bg-red-700 hover:text-white transition-colors w-full text-left"
-                      >
-                        <Eraser size={16} /> Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+  {/* === Sidebar Content === */}
+  <div className="relative z-10 flex flex-col flex-1 text-gray-300">
+    {/* Header */}
+    <div className="p-4 flex items-center justify-between">
+      <span className="text-[#E6F1FF] text-base font-semibold tracking-wide drop-shadow-[0_0_10px_#00C0FF33]">
+        Quirra
+      </span>
+      <button
+        onClick={() => setIsSidebarOpen(false)}
+        className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#1B2238] text-gray-400 hover:text-white transition-colors"
+      >
+        <MenuIcon size={18} />
+      </button>
+    </div>
+
+   {/* === Actions === */}
+<div className="px-3 flex flex-col gap-0.5 mt-2">
+  <button
+    onClick={() => handleNewChat()}
+    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
+  >
+    <PenSquare size={15} /> New Chat
+  </button>
+  <button
+    onClick={() => setIsSearchOpen(true)}
+    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
+  >
+    <Search size={15} /> Search Chats
+  </button>
+  <button
+    onClick={() => console.log("Open library")}
+    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
+  >
+    <Library size={15} /> Library
+  </button>
+</div>
+
+{/* === Recent Chats === */}
+<div className="flex-1 overflow-y-auto custom-scrollbar px-3 pt-2">
+  <h3 className="text-gray-500 text-[10.5px] font-semibold mb-1 px-1 uppercase tracking-wider">
+    Recent Chats
+  </h3>
+
+  {chatSessions.length > 0 ? (
+    <div className="flex flex-col gap-0.5">
+      {chatSessions.map((session) => (
+        <div key={session.id} className="relative group">
+          <button
+            onClick={async () => {
+              await handleSwitchChatSession(session.id);
+              setShowSessionOptionsForId(null);
+              setTimeout(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+              }, 300);
+            }}
+            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] w-full transition-colors overflow-hidden text-ellipsis whitespace-nowrap ${
+              activeChatSessionId === session.id
+                ? "bg-[#1C243A] text-gray-200 font-semibold"
+                : "text-gray-300 hover:bg-[#1B2238] hover:text-white"
+            }`}
+          >
+            <PenSquare size={15} />
+            {session.title || "Untitled Chat"}
+          </button>
+
+          {/* Options (Rename/Delete) */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowSessionOptionsForId(
+                showSessionOptionsForId === session.id ? null : session.id
+              );
+            }}
+            className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-white hover:bg-[#1B2238] transition-colors"
+          >
+            <MoreVertical size={15} />
+          </button>
+
+          {showSessionOptionsForId === session.id && (
+            <div
+              ref={sessionOptionsRef}
+              className="absolute right-7 top-1/2 -translate-y-1/2 bg-[#0C1224] rounded-md shadow-md z-10 flex flex-col overflow-hidden"
+            >
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  renameChatSession(session.id, session.title);
+                }}
+                className="flex items-center gap-1 px-3 py-1.5 text-[11px] text-gray-300 hover:bg-[#1B2238] hover:text-white transition-colors"
+              >
+                <Edit size={13} /> Rename
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteChatSession(session.id);
+                }}
+                className="flex items-center gap-1 px-3 py-1.5 text-[11px] text-red-400 hover:bg-[#321010] hover:text-red-300 transition-colors"
+              >
+                <Eraser size={13} /> Delete
+              </button>
             </div>
-          ) : (
-            <p className="px-3 py-1.5 text-gray-500 text-sm italic">No recent chats.</p>
           )}
         </div>
+      ))}
+    </div>
+  ) : (
+    <p className="px-2 py-1 text-gray-500 text-[12px] italic">No recent chats.</p>
+  )}
+</div>
 
-        {/* User Profile Section at the bottom of the sidebar */}
-        <div className="mt-auto p-4 border-t border-gray-800">
-            <div className="relative" ref={sidebarUserProfileRef}>
-                <button
-                    onClick={() => setShowUserProfileOptions(prev => !prev)}
-                    className="flex items-center w-full gap-3 text-left p-2 rounded-lg hover:bg-gray-800 transition-colors text-gray-300"
-                >
-                    {/* User avatar/initials */}
-                    <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white font-bold text-sm">
-                        {displayUserName ? displayUserName[0]?.toUpperCase() : <User size={20} />}
-                    </div>
-                    {/* Username or "User" fallback */}
-                    <span className="flex-1 text-sm">{displayUserName || "User"}</span>
-                </button>
-                {showUserProfileOptions && (
-                    <div className="absolute bottom-full mb-2 left-0 w-full bg-[#2a304e] border border-gray-700 rounded-lg shadow-lg z-50 animate-slideUpAndFade">
-                        {/* New Daily Usage Display inside the dropdown */}
-                        <div className="px-4 py-2 text-sm text-gray-300 border-b border-gray-700">
-                            <span className="font-semibold block mb-1">Daily Usage</span>
-                            <div className="flex justify-between items-center text-xs">
-                                <span>Tokens Used:</span>
-                                <span className="font-bold text-white">{dailyTokenUsage} / {DAILY_TOKEN_LIMIT_CLIENT}</span>
-                            </div>
-                        </div>
-                        <button
-                            onClick={() => {
-                                router.push("/settings");
-                                setShowUserProfileOptions(false);
-                            }}
-                            className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                        >
-                            <Settings size={20} />
-                            <span>Settings</span>
-                        </button>
-                        <button
-                            onClick={handleLogout}
-                            className="flex items-center gap-3 px-4 py-2 w-full text-left text-sm text-red-400 hover:bg-red-700 hover:text-white rounded-b-lg transition-colors"
-                        >
-                            <LogOut size={20} />
-                            <span>Sign Out</span>
-                        </button>
-                    </div>
-                )}
-            </div>
-        </div>
-      </div>
+{/* === Profile Section === */}
+<div className="p-3" ref={sidebarUserProfileRef}>
+  <ProfileDropdown
+    displayUserName={displayUserName}
+    dailyTokenUsage={dailyTokenUsage}
+    dailyTokenLimit={DAILY_TOKEN_LIMIT_CLIENT}
+    isOpen={showSidebarProfileOptions}
+    onToggle={() => {
+      setShowSidebarProfileOptions(prev => !prev);
+      setShowFloatingProfileOptions(false);
+    }}
+    onSettings={() => {
+      setShowSettingsDropdown(true);
+      setShowSidebarProfileOptions(false);
+      setShowFloatingProfileOptions(false);
+    }}
+    onSignOut={() => {
+      handleLogout();
+      setShowSidebarProfileOptions(false);
+    }}
+    mode="sidebar"
+  />
+</div>
+
+</div>
+</div>
+ 
+ {/* ✅ Detached Global Settings Dropdown */}
+{showSettingsDropdown && (
+  <SettingsDropdown
+    onClose={() => setShowSettingsDropdown(false)}
+    onLogout={handleLogout}
+    onClearHistory={handleDeleteChatHistory}
+    onThemeToggle={toggleTheme}
+    currentTheme={theme}
+  />
+)}
+
+     
 
       {/* Main Content Area */}
-      <main
-        className={`flex-1 flex flex-col transition-all duration-300 ease-in-out`}
+       <main
+        className={`relative flex-1 flex flex-col transition-all duration-300 ease-in-out`}
         // Dynamically set marginLeft based on sidebar state
         style={{
           marginLeft: isSidebarOpen ? SIDEBAR_WIDTH : '64px',
         }}
       >  
         {activeMainView === 'journey' ? (
-          <JourneyPage state={userJourneyState} 
-       />
+        <JourneyPage state={userJourneyState} />
+      ) : activeMainView === 'library' ? (
+        <LibraryPage />
       ) : (
         <>
         {/* 👇 keep your entire existing chat UI here */}
         {/* messages list, streaming renderer, input area, overlays, etc. */}
-        </>
+       </>
       )}
 
-       {/* ---------- Floating Search Overlay ---------- */}
-       {isSearchOpen && (
-         <div className="fixed inset-0 z-[200] bg-black/50 flex items-start justify-center pt-24 px-4">
-          <div
-            ref={searchContainerRef}
-            className="w-full max-w-2xl bg-[#1a213a] rounded-2xl shadow-2xl border border-gray-700 overflow-hidden"
-          >
-            {/* Top bar with input + close */}
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-700">
-              <Search size={20} className="text-gray-400" />
-              <input 
-                ref={searchInputRef}
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setSelectedResult(-1); // reset selection when typing
-                }}
-                  onFocus={() => setIsSearchOpen(true)}
-                  onKeyDown={(e) => {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setSelectedResult((prev) =>
-                        Math.min(prev + 1, searchResults.length - 1)
-                      );
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setSelectedResult((prev) => Math.max(prev - 1, 0));
-                  }
-                  if (e.key === "Enter" && selectedResult >= 0) {
-                    const res = searchResults[selectedResult];
-                    handleResultClick(res); // 🔹 helper function from earlier
-                  }
-                }}
-                placeholder="Search your chats"
-                aria-label="Search your chats"
-                className="flex-1 bg-transparent text-gray-100 placeholder-gray-400 outline-none"
-             />
+      {/* 🔍 Quirra Search Dropdown Overlay */}
+      <QuirraSearchDropdown
+        isOpen={isSearchOpen}
+        searchQuery={searchQuery}
+        searchResults={searchResults}
+        searchLoading={searchLoading}
+        selectedResult={selectedResult}
+        onClose={() => setIsSearchOpen(false)}
+        onQueryChange={(v) => setSearchQuery(v)}
+        onResultClick={handleResultClick}
+        onScroll={onResultsScroll}
+        context={searchContext}
+        onContextChange={setSearchContext}
+     />
 
-               <button
-                 onClick={() => {
-                   if (searchQuery) {
-                     setSearchQuery("");
-                     setSearchResults([]);
-                   } else {
-                     setIsSearchOpen(false);
-                   }
-                 }}
-                 className="text-gray-400 hover:text-white"
-                 aria-label={searchQuery ? "Clear search" : "Close search"}
-               >
-                 <XCircle size={20} />
-               </button>
-             </div>
-            
-              {/* Tabs */}
-              <div className="flex gap-2 p-2 border-b border-gray-700 px-3">
-                <button
-                  onClick={() => {
-                    setSearchContext("chats");
-                    setSearchResults([]);
-                    setSearchQuery(searchQuery);
-                  }}
-                  className={`px-3 py-1 rounded-full text-sm ${
-                    searchContext === "chats"
-                      ? "bg-[#2A304E] text-white"
-                      : "text-gray-300 hover:bg-gray-800"
-                  }`}
-                >
-                  Search your chats
-                </button>
-               <button
-                 onClick={() => {
-                   setSearchContext("docs");
-                   setSearchResults([]);
-                 }}
-                 className={`px-3 py-1 rounded-full text-sm ${
-                   searchContext === "docs"
-                     ? "bg-[#2A304E] text-white"
-                     : "text-gray-300 hover:bg-gray-800"
-                 }`}
-               >
-                 Search help/docs
-               </button>
-              </div>
-
-              {/* Results */}
-              <div
-                ref={searchResultsRef}
-                onScroll={onResultsScroll}
-                className="max-h-80 overflow-y-auto"
-              >
-                {searchLoading && searchResults.length === 0 && (
-                  <div className="p-4 flex items-center gap-2 text-gray-300">
-                    <Loader2 className="animate-spin" />
-                    <span>Searching...</span>
-                  </div>
-                )}
-
-                {searchResults.map((res, idx) => {
-                  const title =
-                    res.title || (res.snippet ? res.snippet.split("\n")[0] : "Untitled");
-                  return (
-                    <button
-                      key={`${res.kind}-${res.id}-${idx}`}
-                      onClick={() => handleResultClick(res)}
-                      className={`w-full text-left px-3 py-3 transition-colors border-b border-gray-800 flex gap-3 items-start ${
-                        idx === selectedResult ? "bg-[#2a304e]" : "hover:bg-[#2a304e]"
-                      }`}
-                    >
-                     <div className="flex-1">
-                       <div className="text-sm font-semibold text-gray-100 mb-1">
-                         {highlightMatch(title, searchQuery)}
-                       </div>
-                       <div className="text-xs text-gray-400 leading-snug">
-                         {res.snippet ? (
-                           highlightMatch(res.snippet, searchQuery)
-                         ) : (
-                           <span className="italic text-gray-500">No preview</span>
-                        )}
-                       </div>
-                     </div>
-                    </button>
-                  );
-                })}
-
-                    {!searchLoading && searchResults.length === 0 && searchQuery.trim().length > 0 && (
-                      <div className="p-4 text-sm text-gray-400 italic">
-                        No results found for “<span className="text-gray-100">{searchQuery}</span>”.
-                      </div>
-                    )}
-
-                    {searchLoading && searchResults.length > 0 && (
-                      <div className="p-3 flex items-center justify-center text-gray-300">
-                        <Loader2 className="animate-spin" />
-                      </div>
-                    )}
-                  </div>
-                 </div>
-                </div>
-              )}
-        {/* ---------- end Floating Search Overlay ---------- */}
 
         {/* Daily Focus Input Rendered Conditionally with close button */}
         {activeMainView === 'chat' && showDailyFocusInput && (
@@ -2090,114 +2037,12 @@ const removePendingFile = (index: number) => {
           </div>
         )}
 
-        {/* Main chat display area OR Initial Centered Input */}
-        {activeMainView === 'chat' && isChatEmpty && !showDailyFocusInput && !showMoodLogger && !showGoalSetting ? (
-          <div className="flex-1 flex flex-col justify-center items-center text-center px-4 py-6 w-full">
-            <h2 className="text-gray-400 text-3xl font-semibold mb-10 animate-fadeIn">
-              How can I help you today?
-            </h2>
-            {/* Centered Input Form - Wider and more prominent */}
-            <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-2.5 flex items-end bg-[#131422] rounded-3xl shadow-lg border border-gray-800 animate-fadeInUp">
-              <div className="relative flex-1 flex items-end">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  multiple
-                  className="hidden"
-                  onChange={handleFileChange}
-                  accept="*"
-                />
-                {/* Floating button and menu */}
-                <div ref={floatingMenuRef} className="relative z-10 mr-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowFloatingMenu(!showFloatingMenu)}
-                    className={`w-9 h-9 p-2 flex items-center justify-center rounded-full transition-all duration-300 ${
-                      showFloatingMenu ? 'bg-[#2a304e]' : 'bg-[#1a213a] hover:bg-[#2a304e]'
-                    }`}
-                    aria-label="Add more options"
-                  >
-                    <Plus size={20} className="text-white" />
-                  </button>
-                  {showFloatingMenu && (
-                    <div className="absolute bottom-12 left-0 w-max bg-[#1a213a] rounded-lg shadow-xl border border-gray-700 z-20 flex flex-col p-2 animate-slideUpAndFade">
-                      <button
-                        onClick={() => {
-                          fileInputRef.current?.click();
-                          setShowFloatingMenu(false);
-                        }}
-                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                      >
-                        <Upload size={20} /> Upload file
-                      </button>
-                      <button
-                        onClick={() => {
-                          setShowDailyFocusInput(prev => !prev);
-                          setShowMoodLogger(false);
-                          setShowGoalSetting(false);
-                          setShowFloatingMenu(false);
-                        }}
-                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                      >
-                        <Target size={20} /> Set Daily Focus
-                      </button>
-                      <button
-                        onClick={() => {
-                          setShowGoalSetting(prev => !prev);
-                          setShowDailyFocusInput(false);
-                          setShowMoodLogger(false);
-                          setShowFloatingMenu(false);
-                        }}
-                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                      >
-                        <Target size={20} /> Set Goal
-                      </button>
-                      <button
-                        onClick={() => {
-                          setShowMoodLogger(prev => !prev);
-                          setShowDailyFocusInput(false);
-                          setShowGoalSetting(false);
-                          setShowFloatingMenu(false);
-                        }}
-                        className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                      >
-                        <Smile size={20} /> Log Mood
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleTextAreaKeyDown}
-                  rows={1}
-                  placeholder={isLoading ? "Quirra is typing..." : editingMessageId ? "Editing message..." : "Ask Quirra Anything..."}
-                  className="w-full resize-none bg-[#131422] rounded-full py-3.5 pl-5 pr-20 text-white placeholder-gray-400 focus:outline-none custom-scrollbar text-base max-h-[120px] overflow-hidden border border-transparent focus:border-transparent focus:ring-0"
-                  disabled={isLoading}
-                />
-                {(input.trim() || isLoading) && (
-                  <button
-                    type="submit"
-                    className="absolute bottom-2 right-2 flex items-center justify-center w-9 h-9 p-2 rounded-full bg-gray-700 text-white hover:bg-gray-600 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
-                    disabled={!input.trim() || isLoading}
-                    aria-label="Send message"
-                  >
-                    {(isLoading || isRegenerating) ? (
-                      <Loader2 className="animate-spin text-white" size={20} />
-                    ) : (
-                      <Send size={20} className="text-white" />
-                    )}
-                    <span className="sr-only">Send</span>
-                  </button>
-                )}
-              </div>
-            </form>
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full flex flex-col custom-scrollbar pb-[100px]">
-            <div className="flex flex-col gap-4">
+        {/* 🧠 Main Chat Display Area */}
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full flex flex-col custom-scrollbar scroll-smooth pb-[100px] min-h-0"
+        >
+          <div className="flex flex-col gap-4">
               {messages.map((msg) => (
                 <div
                   key={msg.id}
@@ -2210,17 +2055,18 @@ const removePendingFile = (index: number) => {
                 >
                   {/* Loading indicator for assistant */}
                   {msg.role === "assistant" && msg.content === "" && (isLoading || isRegenerating) ? (
-                    <div className="flex items-center gap-3 py-1">
-                      <Loader2 className="animate-spin text-gray-400" size={18} />
-                      <div className="flex items-end gap-1" aria-hidden>
-                        <span className="inline-block w-2 h-2 rounded-full bg-gray-400 animate-dot-1" />
-                        <span className="inline-block w-2 h-2 rounded-full bg-gray-400 animate-dot-2" />
-                        <span className="inline-block w-2 h-2 rounded-full bg-gray-400 animate-dot-3" />
-                      </div>
-                      <span className="sr-only">Quirra is typing</span>
-                    </div>
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.5 }}
+                      className="flex justify-center items-center py-6"
+                    >
+                      <ThinkingOrb isThinking={true} size={33} />
+                    </motion.div>
                   ) : (
                     <Fragment>
+                      
                       {/* Message content (rendered above toolbars) */}
                       <ReactMarkdown
                         components={{
@@ -2499,154 +2345,51 @@ const removePendingFile = (index: number) => {
                   )}
                 </div> 
               ))} 
-              <div ref={messagesEndRef} /> {/* Scroll target */}
-            </div>
+             <div ref={messagesEndRef} /> {/* Scroll target */}
           </div>
-        )}
+          
+          {/* 🔹 Optional Fade at the bottom */}
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-[#0B0C1A] to-transparent" />
+        </div>  
 
-        {/* Input Area (Visible only when chat is not empty or if other tools are open) */}
-        {activeMainView === 'chat' && (!isChatEmpty || showDailyFocusInput || showMoodLogger || showGoalSetting) && (
-          <form
-            onSubmit={handleSubmit}
-            // Adjusted classes for ChatGPT-like input area
-              className="sticky bottom-0 w-full max-w-3xl mx-auto p-3 flex items-end bg-[#131422] rounded-3xl shadow-lg border border-gray-800 z-50"
-            >
-            <div className="relative flex-1 flex items-end">
-              <input
-                type="file"
-                ref={fileInputRef}
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
-                accept="*"
-              />
-              {/* Floating button and menu */}
-              <div ref={floatingMenuRef} className="relative z-10 mr-2">
-                <button
-                  type="button"
-                  onClick={() => setShowFloatingMenu(!showFloatingMenu)}
-                  className={`w-9 h-9 p-2 flex items-center justify-center rounded-full transition-all duration-300 ${
-                    showFloatingMenu ? 'bg-[#2a304e]' : 'bg-[#1a213a] hover:bg-[#2a304e]'
-                  }`}
-                  aria-label="Add more options"
-                >
-                  <Plus size={20} className="text-white" />
-                </button>
-                {showFloatingMenu && (
-                  <div className="absolute bottom-12 left-0 w-max bg-[#1a213a] rounded-lg shadow-xl border border-gray-700 z-20 flex flex-col p-2 animate-slideUpAndFade">
-                    <button
-                      onClick={() => {
-                        fileInputRef.current?.click();
-                        setShowFloatingMenu(false);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                    >
-                      <Upload size={20} /> Upload file
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowDailyFocusInput(prev => !prev);
-                        setShowMoodLogger(false);
-                        setShowGoalSetting(false);
-                        setShowFloatingMenu(false);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                    >
-                      <Target size={20} /> Set Daily Focus
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowGoalSetting(prev => !prev);
-                        setShowDailyFocusInput(false);
-                        setShowMoodLogger(false);
-                        setShowFloatingMenu(false);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                    >
-                      <Target size={20} /> Set Goal
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowMoodLogger(prev => !prev);
-                        setShowDailyFocusInput(false);
-                        setShowGoalSetting(false);
-                        setShowFloatingMenu(false);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                    >
-                      <Smile size={20} /> Log Mood
-                    </button>
-                  </div>
-                )}
-              </div>
+     {/* 🧠 Greeting + ChatInput (Unified & Centered like ChatGPT) */}
+{activeMainView === "chat" && (
+  <motion.div
+    layout
+    transition={{ type: "spring", stiffness: 200, damping: 25 }}
+    className={`absolute inset-0 flex flex-col items-center ${
+      isChatEmpty ? "justify-center" : "justify-end pb-4"
+    } z-20`}
+  >
+    <div className="w-full max-w-[740px] px-4">
+      {isChatEmpty && (
+        <motion.h1
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="text-2xl md:text-3xl font-semibold text-center mb-14 mt-[-120px] bg-gradient-to-r from-indigo-400 to-violet-400 text-transparent bg-clip-text"
+        >
+          How can I help you today?
+        </motion.h1>
+      )}
 
-              {/* Pending file previews (images show thumbnail, others show filename) */}
-              {pendingFiles.length > 0 && (
-              <div className="flex flex-wrap gap-2 p-2 border border-gray-700 rounded-lg mb-2">
-                {pendingFiles.map((file, idx) => {
-                  const isImage = file.type.startsWith("image/");
-                  return (
-                    <div key={idx} className="relative group">
-                      {isImage ? (
-                        <img
-                          src={URL.createObjectURL(file)}
-                          alt={file.name}
-                          className="w-16 h-16 object-cover rounded-lg"
-                       />
-                        ) : (
-                          <div className="px-3 py-2 bg-gray-700 rounded-lg text-sm text-white">
-                            📄 {file.name}
-                          </div>
-                        )}
-                          <button
-                            type="button"
-                            onClick={() => removePendingFile(idx)}
-                            className="absolute -top-2 -right-2 bg-gray-800 text-white rounded-full p-1 hover:bg-red-500"
-                          >
-                             ×
-                          </button>
-                        </div>
-                       );
-                     })}
-                   </div>
-                  )}
+      <ChatInput
+        input={input}
+        setInput={setInput}
+        isLoading={isLoading}
+        isRegenerating={isRegenerating}
+        isChatEmpty={isChatEmpty}
+        handleSubmit={handleSubmit}
+        onFileSelect={(files) => handleFileChange({ target: { files } } as any)}
+        onSetDailyFocus={() => setShowDailyFocusInput(true)}
+        onSetGoal={() => setShowGoalSetting(true)}
+        onLogMood={() => setShowMoodLogger(true)}
+        onQuickAction={(action) => console.log("Quick action:", action)}
+      />
+    </div>
+  </motion.div>
+)}
 
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleTextAreaKeyDown}
-                rows={1}
-                placeholder={
-                  isLoading
-                   ? "Quirra is typing..."
-                   : editingMessageId
-                   ? "Editing message..."
-                   : "Ask Quirra anything..."
-                }
-                className="flex-1 resize-none bg-transparent rounded-2xl py-3 px-4 text-white placeholder-gray-400 focus:outline-none custom-scrollbar text-base min-h-[44px] max-h-[160px]"
-                disabled={isLoading}
-             />
-
-              {(input.trim() || isLoading) && (
-
-                <button               
-                  type="submit"
-                  className="absolute bottom-3 right-3 flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
-                  disabled={!input.trim() || isLoading}
-                  aria-label="Send message"
-                >
-                  {(isLoading || isRegenerating) ? (
-                    <Loader2 className="animate-spin text-white" size={20} />
-                  ) : (
-                    <Send size={20} className="text-white" />
-                  )}
-                  <span className="sr-only">Send</span>
-                </button>
-              )}
-            </div>
-          </form>
-        )}
       </main>
       <style jsx global>{`
         /* WebKit Scrollbar Styles (for Chrome, Safari, etc.) */

@@ -1,0 +1,39 @@
+/* === Quirra Library Background Motion Layer === */
+@keyframes quirra-glow-wave {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+.library-bg {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, #0a0b15 0%, #131a27 100%);
+  overflow: hidden;
+}
+
+.library-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.08), rgba(168, 85, 247, 0.08));
+  background-size: 300% 300%;
+  animation: quirra-glow-wave 120s linear infinite;
+  mix-blend-mode: soft-light;
+  opacity: 0.3;
+}
+
+/* Optional: soft blur overlay for depth */
+.library-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(20px);
+  opacity: 0.1;
+}
