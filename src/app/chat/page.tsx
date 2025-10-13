@@ -1937,7 +1937,6 @@ const handlePhotoChange = (files: FileList) => {
     mode="sidebar"
   />
 </div>
-
 </div>
 </div>
 
@@ -1950,9 +1949,6 @@ const handlePhotoChange = (files: FileList) => {
     currentTheme={theme}
   />
 )}
-
-
-     
 
       {/* Main Content Area */}
        <main

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { X } from "lucide-react";
 
+// 🧩 Tabs — will fill these with real sections later
 const tabs = [
   "General",
   "Notification",
@@ -14,11 +15,25 @@ const tabs = [
   "Account",
 ];
 
-export default function SettingsDropdown({ onClose }: { onClose?: () => void }) {
+type SettingsDropdownProps = {
+  onClose?: () => void;
+  onLogout?: () => Promise<void>;
+  onClearHistory?: () => Promise<void>;
+  onThemeToggle?: () => void;
+  currentTheme?: "dark" | "light";
+};
+
+export default function SettingsDropdown({
+  onClose,
+  onLogout,
+  onClearHistory,
+  onThemeToggle,
+  currentTheme = "dark",
+}: SettingsDropdownProps) {
   const [activeTab, setActiveTab] = useState("General");
   const backdropRef = useRef<HTMLDivElement | null>(null);
 
-  // disable scroll when open
+  // === Disable body scroll while modal open ===
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -27,7 +42,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
     };
   }, []);
 
-  // ESC to close
+  // === Close on ESC ===
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose?.();
@@ -36,7 +51,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  // backdrop click
+  // === Backdrop click ===
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === backdropRef.current) onClose?.();
   };
@@ -52,7 +67,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
         initial={{ opacity: 0, scale: 0.96, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 12 }}
-        transition={{ duration: 0.25, ease: "easeOut" }}
+        transition={{ duration: 0.25, ease: 'easeOut' }}
         onClick={(e) => e.stopPropagation()}
         className="relative flex flex-col md:flex-row w-full max-w-[720px] h-[520px]
                    rounded-2xl overflow-hidden
@@ -62,8 +77,10 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
                    text-gray-200 backdrop-blur-md"
       >
         {/* === Sidebar Tabs === */}
-        <aside className="md:w-52 flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-5
-                         bg-[linear-gradient(180deg,rgba(0,212,255,0.05)_0%,rgba(142,45,226,0.05)_100%)]">
+        <aside
+          className="md:w-52 flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-5
+                     bg-[linear-gradient(180deg,rgba(0,212,255,0.05)_0%,rgba(142,45,226,0.05)_100%)]"
+        >
           <div className="flex items-center justify-between md:justify-start md:mb-5">
             <h1 className="text-lg font-semibold text-white tracking-wide">Settings</h1>
             <button
@@ -92,7 +109,7 @@ export default function SettingsDropdown({ onClose }: { onClose?: () => void }) 
           </nav>
         </aside>
 
-        {/* === Main Content Area (Empty For Now) === */}
+        {/* === Main Content Area (empty placeholders) === */}
         <main className="flex-1 relative p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
           <button
             onClick={onClose}
