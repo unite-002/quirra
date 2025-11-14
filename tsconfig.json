@@ -18,6 +18,7 @@
     "isolatedModules": true,
     "jsx": "preserve", // Changed from "preserve" to "react-jsx"
     "incremental": true,
+
     // ✅ Path aliases
     "baseUrl": ".",
     "paths": {
@@ -25,19 +26,29 @@
         "src/*"
       ]
     },
+
     // ✅ Support for Next.js plugin
     "plugins": [
       {
         "name": "next"
       }
+    ],
+
+    // ✅ Added for local type declarations
+    "typeRoots": [
+      "./types",
+      "./node_modules/@types"
     ]
   },
+
   "include": [
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    "types/**/*.d.ts" // ✅ make sure local declaration is included
   ],
+
   "exclude": [
     "node_modules"
   ]

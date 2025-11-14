@@ -1,21 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { motion } from "framer-motion";
-import MemoryCard from "./MemoryCard";
 import FilterPanel from "./FilterPanel";
-import LibraryTopBar from "./LibraryTopBar";
+import MemoryCard from "./MemoryCard";
+import "@/components/QuirraLibrary/library.css";
+
+type LibraryItem = {
+  id: string;
+  title: string;
+  type: "note" | "file" | "project" | "image";
+  tag?: string;
+  description?: string;
+  content?: string;
+  file_url?: string;
+  created_at?: string;
+};
 
 export default function LibraryPage() {
-  const [items, setItems] = useState<any[]>([]);
-  const [filteredItems, setFilteredItems] = useState<any[]>([]);
+  const [items, setItems] = useState<LibraryItem[]>([]);
+  const [filteredItems, setFilteredItems] = useState<LibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
 
-  // 🔹 Fetch items from Supabase
+  // === Load items from Supabase ===
   async function loadItems() {
     setLoading(true);
     const { data, error } = await supabase
@@ -23,124 +31,152 @@ export default function LibraryPage() {
       .select("*")
       .order("created_at", { ascending: false });
 
-    if (error) console.error("Error loading library items:", error);
-    else {
+    if (error) {
+      console.error("Failed to load items:", error);
+      setItems([]);
+      setFilteredItems([]);
+    } else {
       setItems(data || []);
       setFilteredItems(data || []);
     }
     setLoading(false);
   }
 
+  // === Realtime sync ===
   useEffect(() => {
     loadItems();
+
+    const channel = supabase
+      .channel("realtime:quirra_library_items")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "quirra_library_items" },
+        (payload) => {
+          setItems((prev) => [payload.new as LibraryItem, ...prev]);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "quirra_library_items" },
+        (payload) => {
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === payload.new.id ? (payload.new as LibraryItem) : item
+            )
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "quirra_library_items" },
+        (payload) => {
+          setItems((prev) => prev.filter((i) => i.id !== payload.old.id));
+        }
+      );
+
+    channel.subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
-  // 🔍 Filter and search
+  // === Filter + Grouped Logic ===
   useEffect(() => {
     let list = [...items];
-    if (activeFilter) {
-      list = list.filter((i) => i.type === activeFilter);
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(
-        (i) =>
-          i.title.toLowerCase().includes(q) ||
-          (i.description && i.description.toLowerCase().includes(q)) ||
-          (i.tags && i.tags.some((t: string) => t.toLowerCase().includes(q)))
-      );
-    }
+    if (activeFilter) list = list.filter((i) => i.type === activeFilter);
     setFilteredItems(list);
-  }, [searchQuery, activeFilter, items]);
+  }, [activeFilter, items]);
 
-  // 📤 Handle Upload
-  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
+  // === Helper: group by type ===
+  const groupItemsByType = (items: LibraryItem[]) => {
+    const groups: Record<string, LibraryItem[]> = {};
+    items.forEach((item) => {
+      const key = item.type || "other";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+    return groups;
+  };
 
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("library_uploads")
-      .upload(`files/${Date.now()}-${file.name}`, file);
+  const grouped = groupItemsByType(filteredItems);
 
-    if (uploadError) {
-      console.error("Upload failed:", uploadError);
-      setUploading(false);
-      return;
-    }
-
-    const { error: insertError } = await supabase
-      .from("quirra_library_items")
-      .insert([
-        {
-          title: file.name,
-          type: "document",
-          description: "Uploaded file",
-          tags: ["upload"],
-        },
-      ]);
-
-    if (insertError) console.error("Failed to insert item:", insertError);
-
-    setUploading(false);
-    loadItems();
-  }
-
-  // 🌌 UI
+  // === UI ===
   return (
-    <div className="fixed inset-0 flex flex-col bg-[#0A0B15] text-white overflow-hidden">
-      {/* === Background Layers === */}
-      <div
-        className="absolute inset-0 z-0"
-        style={{
-          background: "radial-gradient(circle at center, #0A0B15 0%, #131A27 100%)",
-        }}
-      />
-      <div
-        className="absolute inset-0 z-0 opacity-[0.06]"
-        style={{
-          background:
-            "linear-gradient(125deg, rgba(0,229,255,0.2) 0%, rgba(168,85,247,0.2) 100%)",
-          mixBlendMode: "overlay",
-          filter: "blur(80px)",
-        }}
+    <div className="fixed inset-0 flex flex-col overflow-hidden">
+      {/* === Static Background === */}
+      <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute inset-0 bg-[#05060F]" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#0A0B1A] to-[#0F172A]" />
+        <div
+          className="absolute top-[-22%] left-[-12%] w-[62vw] h-[62vh] rounded-full blur-[180px]"
+          style={{ background: "rgba(63,81,181,0.10)" }}
+        />
+        <div
+          className="absolute bottom-[-12%] right-[-12%] w-[50vw] h-[50vh] rounded-full blur-[160px]"
+          style={{ background: "rgba(142,45,226,0.10)" }}
+        />
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(circle at 52% 48%, rgba(0,212,255,0.10), transparent 55%)",
+            filter: "blur(60px)",
+            opacity: 0.18,
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/40 pointer-events-none" />
+      </div>
+
+      {/* === Top Filter Bar === */}
+      <FilterPanel
+        activeFilter={activeFilter}
+        onFilterChange={setActiveFilter}
       />
 
-      {/* === Top Bar === */}
-      <LibraryTopBar
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        uploading={uploading}
-        onUpload={handleUpload}
-      />
-
-      {/* === Main Content Area (Scrollable only here) === */}
-      <div className="relative z-10 flex flex-1 overflow-hidden">
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <main className="p-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-            {loading ? (
-              <p className="text-gray-400 animate-pulse">Loading Quirra Library…</p>
-            ) : filteredItems.length > 0 ? (
-              filteredItems.map((item) => (
-                <motion.div
-                  key={item.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <MemoryCard item={item} />
-                </motion.div>
-              ))
-            ) : (
-              <p className="text-gray-500 italic col-span-full text-center py-10">
-                No results found. Try another search or upload a new memory.
-              </p>
-            )}
-          </main>
-        </div>
-
-        {/* === Filter Panel (Fixed on Side) === */}
-        <FilterPanel activeFilter={activeFilter} onFilterChange={setActiveFilter} />
+      {/* === Main Grid === */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar pl-[8rem] pr-12 pt-8 pb-8 sm:pl-[10rem] sm:pr-14">
+        {loading ? (
+          <div className="text-[#9CAAC4] text-center py-24 text-sm">
+            Loading Quirra Library...
+          </div>
+        ) : filteredItems.length > 0 ? (
+          activeFilter === null ? (
+            // === Grouped "All" view ===
+            <div className="flex flex-col gap-12">
+              {Object.entries(grouped).map(([type, group]) => (
+                <div key={type}>
+                  <h3 className="text-[#9CAAC4] text-sm uppercase mb-4 tracking-wide select-none">
+                    {type === "note"
+                      ? "📝 Notes"
+                      : type === "file"
+                      ? "📁 Files"
+                      : type === "project"
+                      ? "🚀 Projects"
+                      : type === "image"
+                      ? "🖼️ Images"
+                      : "📦 Other"}
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6 justify-items-start">
+                    {group.map((item) => (
+                      <MemoryCard item={item} key={item.id} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            // === Filtered specific view ===
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6 justify-items-start">
+              {filteredItems.map((item) => (
+                <MemoryCard item={item} key={item.id} />
+              ))}
+            </div>
+          )
+        ) : (
+          <div className="text-[#7A859C] text-center py-24 italic text-sm">
+            No results found.
+          </div>
+        )}
       </div>
     </div>
   );

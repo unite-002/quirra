@@ -40,11 +40,6 @@ import {
  } from "lucide-react";
 
 import toast, { Toaster } from "react-hot-toast";
-
-import { PersonalityOnboarding } from "@/components/PersonalityOnboarding";
-import DailyFocusInput from '@/components/DailyFocusInput';
-import MoodLogger from '@/components/MoodLogger';
-import { GoalSetting } from '@/components/GoalSetting'; // Import GoalSetting component
 import { ThinkingOrb } from "@/components/ThinkingOrb";
 import ChatInput from "@/components/ChatInput";
 import QuirraBackground from "@/components/QuirraBackground";
@@ -52,14 +47,19 @@ import QuirraSidePanelBackground from "@/components/QuirraSidePanelBackground";
 import QuirraSidebarBackground from "@/components/QuirraSidebarBackground";
 import QuirraSearchDropdown from "@/components/QuirraSearchDropdown";
 import LibraryPage from "@/components/QuirraLibrary/LibraryPage"
-import SettingsDropdown from "@/components/SettingsDropdown";
 import ProfileDropdown from "@/components/ProfileDropdown";
+import JourneyPage from "@/app/Journey/page";
+import Link from "next/link";
+import MessageToolbar from "@/components/MessageToolbar";
+import SettingsDropdown from "@/components/Settings/SettingsDropdown";
+import { SettingsProvider } from "@/components/Settings/useSettings";
+
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { dark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 
 // Interface for code block props in ReactMarkdown
 interface CodeProps {
@@ -81,6 +81,12 @@ interface PersonalityProfile {
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  // Optional discriminator for message kinds (text, image, file, etc.)
+  type?: "text" | "image" | "file";
+  // Optional URLs / metadata used when type is "image" or "file"
+  imageUrl?: string;
+  fileUrl?: string;
+  fileName?: string;
   emotion_score?: number; // Optional sentiment score for user messages
   personality_profile?: PersonalityProfile; // Optional personality profile snapshot
   id: string; // Unique ID for the message
@@ -125,7 +131,7 @@ export default function Home() {
   // State variables for chat messages and input
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  
+
   // Pending files (preview before sending)
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
@@ -181,18 +187,366 @@ useEffect(() => {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [showSessionOptionsForId, setShowSessionOptionsForId] = useState<string | null>(null); // For chat session dropdown menu
 
-  // Feature-specific UI toggles
-  const [showDailyFocusInput, setShowDailyFocusInput] = useState<boolean>(false);
-  const [showMoodLogger, setShowMoodLogger] = useState<boolean>(false);
-  const [showGoalSetting, setShowGoalSetting] = useState<boolean>(false); // State for GoalSetting visibility
+  // 🧠 Automatically persist messages per chat session (ChatGPT-style)
+useEffect(() => {
+  try {
+    if (!activeChatSessionId) return; // no session yet
+    if (!messages) return;
+
+    const key = `quirra_chat_messages_${activeChatSessionId}`;
+    localStorage.setItem(key, JSON.stringify(messages));
+  } catch (error) {
+    console.warn("⚠️ Failed to save chat messages:", error);
+  }
+}, [messages, activeChatSessionId]);
 
   // Message interaction states
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null); // For copy-to-clipboard feedback
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null); // For editing user messages
   const [showUserProfileOptions, setShowUserProfileOptions] = useState<boolean>(false); // State for user profile dropdown 
+  const [showJourneySupport, setShowJourneySupport] = useState(false);
 
-  // 🟢 Track votes for assistant messages
-  const [messageVotes, setMessageVotes] = useState<{ [id: string]: "up" | "down" | null }>({});
+ // 💬 UI states for message actions
+const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+const [editText, setEditText] = useState("");
+const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+const [sharedMessageId, setSharedMessageId] = useState<string | null>(null);
+
+// 🧠 Track votes for assistant messages
+const [messageVotes, setMessageVotes] = useState<{ [id: string]: "up" | "down" | null }>({});
+
+// ✏️ Edit message — with full history tracking like ChatGPT
+const handleEditMessage = async (id: string, newText: string) => {
+  try {
+    // 🔹 Get current user
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) throw sessionError;
+    const userId = session?.user?.id;
+    if (!userId) {
+      console.warn("⚠️ No user session found.");
+      return;
+    }
+
+    // 🔹 Find old message content
+    const oldMsg = messages.find((m) => m.id === id);
+    if (!oldMsg) {
+      console.warn("⚠️ Message not found for editing:", id);
+      return;
+    }
+
+    // 🟢 Optimistic UI update
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, content: newText } : m))
+    );
+
+    // 🔹 Begin Supabase operations
+    // 1️⃣ Save edit history
+    const { error: historyError } = await supabase.from("message_edits").insert({
+      message_id: id,
+      user_id: userId,
+      old_content: oldMsg.content,
+      new_content: newText,
+    });
+
+    if (historyError) throw historyError;
+
+    // 2️⃣ Update message content
+    const { error: updateError } = await supabase
+      .from("messages")
+      .update({ content: newText })
+      .eq("id", id);
+
+    if (updateError) throw updateError;
+
+    console.log(`✅ Message ${id} successfully updated and version saved`);
+  } catch (err) {
+    console.error("❌ Failed to update message or save history:", err);
+  }
+};
+
+// 🕓 Load edit history for a message
+const fetchMessageEditHistory = async (messageId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from("message_edits")
+      .select("id, old_content, new_content, created_at")
+      .eq("message_id", messageId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.error("❌ Failed to fetch message edit history:", err);
+    return [];
+  }
+};
+
+// 🔄 Revert a message to an older version
+const revertMessageToVersion = async (messageId: string, oldContent: string) => {
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) throw sessionError;
+    const userId = session?.user?.id;
+    if (!userId) return;
+
+    // Save current version before reverting
+    const msg = messages.find((m) => m.id === messageId);
+    if (!msg) return;
+
+    await supabase.from("message_edits").insert({
+      message_id: messageId,
+      user_id: userId,
+      old_content: msg.content,
+      new_content: oldContent,
+    });
+
+    // Apply revert
+    const { error } = await supabase
+      .from("messages")
+      .update({ content: oldContent })
+      .eq("id", messageId);
+
+    if (error) throw error;
+
+    // Update locally
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, content: oldContent } : m
+      )
+    );
+
+    console.log(`✅ Message ${messageId} reverted to an earlier version`);
+  } catch (err) {
+    console.error("❌ Failed to revert message:", err);
+  }
+};
+
+// 🕓 Fetch edit history for a message
+const fetchEditHistory = async (messageId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from("message_edits")
+      .select("id, previous_content, created_at")
+      .eq("message_id", messageId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    return data || [];
+  } catch (err) {
+    console.error("❌ Failed to load edit history:", err);
+    return [];
+  }
+};
+
+
+// 👍 Like message — persist to Supabase
+const handleLike = async (id: string) => {
+  try {
+    const {
+      data: { session },
+      error: authError,
+    } = await supabase.auth.getSession();
+
+    if (authError || !session?.user) {
+      console.warn("⚠️ No active user session for like action");
+      return;
+    }
+
+    const userId = session.user.id;
+    const currentVote = messageVotes[id];
+    const newVote = currentVote === "up" ? null : "up";
+
+    // Optimistic UI update
+    setMessageVotes((prev) => ({ ...prev, [id]: newVote }));
+
+    if (newVote) {
+      // 👍 Add or update like
+      const { error } = await supabase
+        .from("message_votes")
+        .upsert(
+          { user_id: userId, message_id: id, vote: "up" },
+          { onConflict: "user_id,message_id" }
+        );
+
+      if (error) throw error;
+      console.log(`✅ Message ${id} liked by ${userId}`);
+    } else {
+      // 🗑️ Remove existing like
+      const { error } = await supabase
+        .from("message_votes")
+        .delete()
+        .eq("user_id", userId)
+        .eq("message_id", id);
+
+      if (error) throw error;
+      console.log(`✅ Like removed for message ${id}`);
+    }
+  } catch (err) {
+    console.error("❌ Failed to update like:", err);
+    // rollback optimistic change
+    setMessageVotes((prev) => ({ ...prev, [id]: messageVotes[id] }));
+  }
+};
+
+// 👎 Dislike message — persist to Supabase
+const handleDislike = async (id: string) => {
+  try {
+    const {
+      data: { session },
+      error: authError,
+    } = await supabase.auth.getSession();
+
+    if (authError || !session?.user) {
+      console.warn("⚠️ No active user session for dislike action");
+      return;
+    }
+
+    const userId = session.user.id;
+    const currentVote = messageVotes[id];
+    const newVote = currentVote === "down" ? null : "down";
+
+    // Optimistic UI update
+    setMessageVotes((prev) => ({ ...prev, [id]: newVote }));
+
+    if (newVote) {
+      // 👎 Add or update dislike
+      const { error } = await supabase
+        .from("message_votes")
+        .upsert(
+          { user_id: userId, message_id: id, vote: "down" },
+          { onConflict: "user_id,message_id" }
+        );
+
+      if (error) throw error;
+      console.log(`✅ Message ${id} disliked by ${userId}`);
+    } else {
+      // 🗑️ Remove existing dislike
+      const { error } = await supabase
+        .from("message_votes")
+        .delete()
+        .eq("user_id", userId)
+        .eq("message_id", id);
+
+      if (error) throw error;
+      console.log(`✅ Dislike removed for message ${id}`);
+    }
+  } catch (err) {
+    console.error("❌ Failed to update dislike:", err);
+    // rollback optimistic change
+    setMessageVotes((prev) => ({ ...prev, [id]: messageVotes[id] }));
+  }
+};
+
+// 📤 Share message (ChatGPT-style behavior)
+const shareMessage = async (msg: any) => {
+  const text = msg.content;
+
+  try {
+    // ✅ Optional Supabase log (if you want analytics)
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (userId) {
+      await supabase.from("message_shares").insert({
+        user_id: userId,
+        message_id: msg.id,
+      });
+    }
+
+    // ✅ Try native share on supported devices
+    if (navigator.share) {
+      await navigator.share({ text });
+      setSharedMessageId(msg.id); // trigger "Shared ✅" animation
+    } else {
+      // ✅ Fallback for desktop
+      await navigator.clipboard.writeText(text);
+      setSharedMessageId(msg.id); // trigger animation
+    }
+
+    // Clear after short delay
+    setTimeout(() => setSharedMessageId(null), 2000);
+  } catch (err) {
+    console.error("❌ Share failed or canceled:", err);
+  }
+};
+
+
+
+// ♻️ Regenerate assistant response (fixed typing)
+const regenerateResponse = async (msg: { id: string; content: string }) => {
+  const fullMsg = messages.find((m) => m.id === msg.id);
+  if (!fullMsg || fullMsg.role !== "assistant") return;
+  if (!activeChatSessionId) {
+    console.warn("No active chat session for regeneration.");
+    return;
+  }
+
+  setIsRegenerating(true);
+
+  try {
+    // 1️⃣ Find the user message before this assistant reply
+    const msgIndex = messages.findIndex((m) => m.id === fullMsg.id);
+    const triggeringUserMsg =
+      msgIndex > 0 ? [...messages].slice(0, msgIndex).reverse().find((m) => m.role === "user") : null;
+
+    if (!triggeringUserMsg) {
+      console.warn("⚠️ No user message found before this assistant message.");
+      setIsRegenerating(false);
+      return;
+    }
+
+    // 2️⃣ Replace assistant message with blank placeholder
+    const placeholderId = crypto.randomUUID();
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === fullMsg.id
+          ? { ...m, id: placeholderId, content: "", created_at: new Date().toISOString() }
+          : m
+      )
+    );
+
+    // 3️⃣ Call your existing API streaming logic
+    await sendToApiAndSave(messages, triggeringUserMsg, placeholderId, triggeringUserMsg.created_at);
+  } catch (err) {
+    console.error("❌ Error regenerating message:", err);
+  } finally {
+    setIsRegenerating(false);
+  }
+};
+
+
+// === Load current user's votes for all messages in active session ===
+const loadUserVotesForSession = useCallback(async () => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId || !activeChatSessionId) return;
+
+    const { data: votes, error } = await supabase
+      .from("message_votes")
+      .select("message_id, vote")
+      .eq("user_id", userId)
+      .in("message_id", messages.map((m) => m.id));
+
+    if (error) {
+      console.error("Failed to load message votes:", error);
+      return;
+    }
+
+    const map: { [id: string]: "up" | "down" | null } = {};
+    (votes || []).forEach((v: any) => (map[v.message_id] = v.vote));
+    setMessageVotes(map);
+  } catch (err) {
+    console.error("Error loading votes:", err);
+  }
+}, [activeChatSessionId, messages]);
 
  // === SETTINGS DROPDOWN HELPERS ===
 
@@ -343,6 +697,138 @@ const JourneyIcon: React.FC<{ state: string; size?: number }> = ({ state, size =
   // New state for dynamic input position
   const [isChatEmpty, setIsChatEmpty] = useState(true);
 
+  // 🔹 Track scroll position to fade input like ChatGPT
+const [isScrolledUp, setIsScrolledUp] = useState(false);
+
+useEffect(() => {
+  const container = messagesContainerRef.current;
+  if (!container) return;
+
+  const handleScroll = () => {
+    // check if user is near bottom
+    const isNearBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight < 20;
+    setIsScrolledUp(!isNearBottom);
+  };
+
+  container.addEventListener("scroll", handleScroll);
+  return () => container.removeEventListener("scroll", handleScroll);
+}, []);
+
+  // 🧠 Random greeting logic (ChatGPT-style)
+const greetings = [
+  "How can I help you today?",
+  "What can I do for you?",
+  "Need help with something?",
+  "What’s on your mind today?",
+  "Ready to create something new?",
+  "How are you feeling today?",
+  "What would you like to explore?",
+  "Looking for some inspiration?",
+];
+
+const [randomGreeting, setRandomGreeting] = useState(
+  greetings[Math.floor(Math.random() * greetings.length)]
+);
+
+useEffect(() => {
+  if (isChatEmpty) {
+    const random = greetings[Math.floor(Math.random() * greetings.length)];
+    setRandomGreeting(random);
+  }
+}, [isChatEmpty]);
+
+
+// ===== typing / streaming helpers (TOP-LEVEL in the component) =====
+const [renderedMessages, setRenderedMessages] = useState<Record<string, string>>({});
+const typingTimersRef = useRef<Record<string, number | null>>({});
+
+// cleanup timers when component unmounts
+useEffect(() => {
+  return () => {
+    Object.values(typingTimersRef.current).forEach((t) => {
+      if (t) clearInterval(t as number);
+    });
+    typingTimersRef.current = {};
+  };
+}, []);
+
+// typing effect: start typing for assistant messages that don't yet have rendered content
+useEffect(() => {
+  // remove timers for messages that no longer exist
+  const currentIds = new Set(messages.map((m) => m.id));
+  Object.keys(typingTimersRef.current).forEach((id) => {
+    if (!currentIds.has(id)) {
+      const t = typingTimersRef.current[id];
+      if (t) clearInterval(t as number);
+      delete typingTimersRef.current[id];
+    }
+  });
+
+  // start typing for any assistant message that isn't rendered yet
+  messages.forEach((msg) => {
+    if (msg.role !== "assistant" || renderedMessages[msg.id] !== undefined || !msg.content) return;
+
+    const chars = msg.content.split("");
+    let index = 0;
+
+    // dynamic base speed
+    let baseSpeed = 24;
+    const len = chars.length;
+    if (len < 100) baseSpeed = 14;
+    else if (len < 400) baseSpeed = 22;
+    else baseSpeed = 32;
+
+    if (/```/.test(msg.content)) baseSpeed = 10; // code => faster
+    if (/^-|\d+\./m.test(msg.content)) baseSpeed *= 0.85; // lists => confident
+    if (/[!?]|—|…/.test(msg.content)) baseSpeed *= 1.4; // emotional => slower
+
+    const punctuation = /[.,;!?]/;
+
+    // clear previous timer if any
+    if (typingTimersRef.current[msg.id]) {
+      clearInterval(typingTimersRef.current[msg.id] as number);
+      delete typingTimersRef.current[msg.id];
+    }
+
+    const startTyping = () => {
+      typingTimersRef.current[msg.id] = window.setInterval(() => {
+        const next = chars[index];
+        setRenderedMessages((prev) => ({
+          ...prev,
+          [msg.id]: (prev[msg.id] || "") + next,
+        }));
+        index++;
+
+        if (punctuation.test(next)) {
+          // brief pause after punctuation
+          if (typingTimersRef.current[msg.id]) {
+            clearInterval(typingTimersRef.current[msg.id] as number);
+            typingTimersRef.current[msg.id] = null;
+          }
+          setTimeout(() => {
+            if (index < chars.length) startTyping();
+          }, baseSpeed * 3);
+        }
+
+        if (index >= chars.length) {
+          if (typingTimersRef.current[msg.id]) {
+            clearInterval(typingTimersRef.current[msg.id] as number);
+            typingTimersRef.current[msg.id] = null;
+            delete typingTimersRef.current[msg.id];
+          }
+        }
+      }, baseSpeed);
+    };
+
+    startTyping();
+  });
+
+// only re-run when `messages` identity changes
+}, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+
+
   // Modal state
   const [modalState, setModalState] = useState<ModalState>({
     isOpen: false,
@@ -351,97 +837,6 @@ const JourneyIcon: React.FC<{ state: string; size?: number }> = ({ state, size =
     message: '',
   });
 
- // ---------- JourneyPage (no Back button) ----------
-const JourneyPage: React.FC<{
-  state: 'neutral' | 'success' | 'obstacle' | 'goal' | 'curious' | 'sad' | 'motivated' | 'growth';
-}> = ({ state }) => {
-  const headline =
-    state === 'success' ? "You're shining — great progress!" :
-    state === 'obstacle' ? "You're facing a block — let's work through it." :
-    state === 'goal' ? "Focused on a goal — keep the momentum." :
-    state === 'curious' ? "Curious — exploring new ideas." :
-    state === 'sad' ? "Feeling low — you're not alone." :
-    state === 'motivated' ? "You're fired up — go for it!" :
-    state === 'growth' ? "Slow steady growth — well done." :
-    "Your Journey";
-
-  const subtext =
-    state === 'success' ? "Celebrate the wins. Small rituals help keep momentum." :
-    state === 'obstacle' ? "A small plan can turn a block into a step." :
-    state === 'goal' ? "Micro-tasks help move the needle. Want a 48-hour plan?" :
-    state === 'curious' ? "I can fetch a mini learning plan or resources." :
-    state === 'sad' ? "Breathe. Want a grounding exercise or a short prompt?" :
-    state === 'motivated' ? "Great energy — convert it into a short action list." :
-    state === 'growth' ? "Keep a daily note of progress — it compounds." :
-    "Quirra watches your journey and adapts to help.";
-
-  return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-[#070916] to-[#0c1220] text-white">
-      {/* Header inside main canvas (Back button removed) */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-lg bg-gray-800/30 flex items-center justify-center">
-            <JourneyIcon state={state} size={28} />
-          </div>
-          <div>
-            <div className="text-lg font-semibold">{headline}</div>
-            <div className="text-sm text-gray-400">{subtext}</div>
-          </div>
-        </div>
-
-        {/* intentionally empty right side so header remains balanced */}
-        <div className="w-24" />
-      </div>
-
-      {/* Canvas area: clean, no inputs */}
-      <div className="flex-1 overflow-auto p-8">
-        <div className="max-w-5xl mx-auto">
-          <div className="rounded-2xl p-8 bg-gradient-to-br from-[#071026] to-[#09112b] border border-gray-800 shadow-lg">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="col-span-2">
-                <h3 className="text-sm text-gray-300 mb-2">Recent signals</h3>
-                <div className="space-y-3">
-                  <div className="p-4 rounded-lg bg-[#07172a] border border-gray-800">
-                    <div className="text-sm text-gray-300">Latest chat detection</div>
-                    <div className="mt-2 text-white font-medium">{headline}</div>
-                    <div className="text-xs text-gray-400 mt-1">Detected from your recent messages — Quirra adapts automatically.</div>
-                  </div>
-
-                  <div className="p-4 rounded-lg bg-[#07172a] border border-gray-800">
-                    <div className="text-sm text-gray-300">Suggestions</div>
-                    <div className="mt-2 text-white font-medium">Quick help tailored to this moment</div>
-                    <div className="text-xs text-gray-400 mt-1">Example: 3-step plan, calming prompt, or micro-learning list.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-sm text-gray-300 mb-2">State</h3>
-                <div className="rounded-lg p-4 bg-[#0b1626] border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-md bg-gray-900/20 flex items-center justify-center">
-                      <JourneyIcon state={state} size={22} />
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-300">{state.toUpperCase()}</div>
-                      <div className="text-xs text-gray-400 mt-1">Real-time — updated from your chats</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-8 rounded-lg border border-dashed border-gray-700 p-12 text-center text-gray-400">
-              <div className="text-lg mb-3">Living world placeholder</div>
-              <div className="text-sm">This is the blank canvas for the full Journey experience (timeline, evolving landscape, animations). No inputs here — pure reflection.</div>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 
   // Refs for DOM elements
@@ -454,10 +849,11 @@ const JourneyPage: React.FC<{
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const [showSidebarProfileOptions, setShowSidebarProfileOptions] = useState(false);
   const [showFloatingProfileOptions, setShowFloatingProfileOptions] = useState(false);
+  const [streamingMessages, setStreamingMessages] = useState<{ [key: string]: string }>({});
+
 
 // Controls visibility of the Settings dropdown
 const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
-
  
   useEffect(() => {
     // Auto-scroll to bottom whenever new messages are added
@@ -514,120 +910,181 @@ useEffect(() => {
     );
   };
 
-  // Fetch search results (sessions + messages)
-  const fetchSearchResults = async (query: string, page = 0, append = false) => {
-    if (!query.trim()) {
+ // Fetch search results (sessions + messages)
+const fetchSearchResults = async (query: string, page = 0, append = false) => {
+  if (!query.trim()) {
+    setSearchResults([]);
+    setHasMoreSearchResults(true);
+    setSearchLoading(false);
+    return;
+  }
+
+  if (searchAbortRef.current) searchAbortRef.current.abort();
+  searchAbortRef.current = new AbortController();
+
+  setSearchLoading(true);
+  try {
+    const from = page * SEARCH_PAGE_SIZE;
+    const to = from + SEARCH_PAGE_SIZE - 1;
+
+    // Get logged-in user (so we only return this user's data)
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr) {
+      console.error("Failed to get user for search:", userErr);
+      setSearchLoading(false);
+      return;
+    }
+    const userId = userData?.user?.id;
+    if (!userId) {
+      console.warn("No logged-in user for search.");
       setSearchResults([]);
-      setHasMoreSearchResults(true);
       setSearchLoading(false);
       return;
     }
 
-    if (searchAbortRef.current) searchAbortRef.current.abort();
-    searchAbortRef.current = new AbortController();
+    if (searchContext === "chats") {
+      // Sessions (only this user's sessions)
+      const { data: sessions } = await supabase
+        .from("chat_sessions")
+        .select("id, title, created_at")
+        .ilike("title", `%${query}%`)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
-    setSearchLoading(true);
-    try {
-      const from = page * SEARCH_PAGE_SIZE;
-      const to = from + SEARCH_PAGE_SIZE - 1;
+      // Messages (only this user's messages)
+      const { data: messages } = await supabase
+        .from("messages")
+        .select("id, content, chat_session_id, created_at")
+        .ilike("content", `%${query}%`)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
-      if (searchContext === 'chats') {
-        // Sessions
-        const { data: sessions } = await supabase
-          .from("chat_sessions")
-          .select("id, title, created_at")
-          .ilike("title", `%${query}%`)
-          .order("created_at", { ascending: false })
-          .range(from, to);
+      const mapped: any[] = [];
 
-        // Messages
-        const { data: messages } = await supabase
-          .from("messages")
-          .select("id, content, chat_session_id, created_at")
-          .ilike("content", `%${query}%`)
-          .order("created_at", { ascending: false })
-          .range(from, to);
+      sessions?.forEach((s: any) =>
+        mapped.push({
+          kind: "session",
+          id: s.id,
+          title: s.title || "Untitled chat",
+          snippet: s.title || "",
+          chat_session_id: s.id,
+          date: s.created_at,
+        })
+      );
 
-        const mapped: any[] = [];
-
-        sessions?.forEach((s: any) =>
-          mapped.push({
-            kind: "session",
-            id: s.id,
-            title: s.title || "Untitled chat",
-            snippet: s.title || "",
-            chat_session_id: s.id,
-          })
-        );
-
-        messages?.forEach((m: any) => {
-          const text = typeof m.content === "string" ? m.content : "";
-          const snippet = text.length > 160 ? text.slice(0, 157) + "..." : text;
-          mapped.push({
-            kind: "message",
-            id: m.id,
-            title: "",
-            snippet,
-            chat_session_id: m.chat_session_id,
-          });
+      messages?.forEach((m: any) => {
+        const text = typeof m.content === "string" ? m.content : "";
+        const snippet = text.length > 160 ? text.slice(0, 157) + "..." : text;
+        mapped.push({
+          kind: "message",
+          id: m.id,
+          title: "",
+          snippet,
+          chat_session_id: m.chat_session_id,
+          date: m.created_at,
         });
+      });
 
-        // Deduplicate
-        const unique: any[] = [];
-        const seen = new Set();
-        for (const r of mapped) {
-          const key = r.kind === "session" ? `s:${r.id}` : `m:${r.id}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            unique.push(r);
-          }
+      // Deduplicate preserving first seen order
+      const unique: any[] = [];
+      const seen = new Set<string>();
+      for (const r of mapped) {
+        const key = r.kind === "session" ? `s:${r.id}` : `m:${r.id}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          unique.push(r);
         }
-
-        setSearchResults(append ? [...searchResults, ...unique] : unique);
-        setHasMoreSearchResults(unique.length === SEARCH_PAGE_SIZE);
-        setSearchPage(page);
-      } else {
-        // Docs search placeholder
-        setSearchResults([]);
-        setHasMoreSearchResults(false);
       }
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.name !== "AbortError") {
-          console.error("Search failed:", err);
-        }
-      } else {
+
+      // Sort by date descending so sections and order are consistent
+      unique.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      setSearchResults((prev) => (append ? [...prev, ...unique] : unique));
+
+      // If either sessions or messages returned a full page, assume more may exist
+      const more =
+        (sessions && sessions.length === SEARCH_PAGE_SIZE) ||
+        (messages && messages.length === SEARCH_PAGE_SIZE) ||
+        unique.length >= SEARCH_PAGE_SIZE;
+      setHasMoreSearchResults(Boolean(more));
+      setSearchPage(page);
+    } else {
+      // Docs search placeholder (if you later add docs, filter by user if needed)
+      setSearchResults([]);
+      setHasMoreSearchResults(false);
+    }
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.name !== "AbortError") {
         console.error("Search failed:", err);
       }
-    } finally {
-      setSearchLoading(false);
+    } else {
+      console.error("Search failed:", err);
     }
-  };
+  } finally {
+    setSearchLoading(false);
+  }
+};
 
-  // 🔹 Handle clicking or pressing Enter on a search result
-  const handleResultClick = (res: any) => {
+// 🔹 Handle clicking or pressing Enter on a search result
+const handleResultClick = async (res: any) => {
+  // close UI quickly
   setIsSearchOpen(false);
   setSearchQuery("");
   setSearchResults([]);
 
-  if (res.id) {
-    setHighlightedMessageId(res.id);
+  console.log("Search result clicked:", res);
 
-    const tryScroll = (attempts = 0) => {
-      const el = document.getElementById(`message-${res.id}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      } else if (attempts < 5) {
-        setTimeout(() => tryScroll(attempts + 1), 300);
-      }
-    };
-    tryScroll();
-
-    // 👇 shorter flash, like ChatGPT 
-    setTimeout(() => setHighlightedMessageId(null), 800);
+  // If the result belongs to another chat session, switch to it first
+  if (res.chat_session_id && res.chat_session_id !== activeChatSessionId) {
+    await handleSwitchChatSession(res.chat_session_id);
   }
-};
 
+  // Now wait for the message element to exist in the DOM, using requestAnimationFrame polling
+  let attempts = 0;
+  const maxAttempts = 20; // ~20 * ~50ms typical => ~1s
+  const tryScroll = () =>
+    new Promise<void>((resolve) => {
+      const check = () => {
+        const el = document.getElementById(`message-${res.id}`);
+        if (el) {
+          // smooth scroll and highlight
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightedMessageId(res.id);
+
+          // optional DOM animate for a nicer fade (also kept by class)
+          try {
+            // tiny safe animate; browsers may ignore unsupported props
+            (el as HTMLElement).animate(
+              [
+                { backgroundColor: "rgba(0,224,255,0.18)" },
+                { backgroundColor: "transparent" },
+              ],
+              { duration: 1000, easing: "ease-out" }
+            );
+          } catch (e) {
+            /* ignore if animate not supported */
+          }
+
+          // clear highlight after animation duration
+          setTimeout(() => setHighlightedMessageId(null), 1000);
+          resolve();
+        } else if (attempts < maxAttempts) {
+          attempts++;
+          // use requestAnimationFrame so we check right after DOM paint
+          requestAnimationFrame(check);
+        } else {
+          console.warn("Could not find message element to scroll to:", res.id);
+          resolve();
+        }
+      };
+      check();
+    });
+
+  await tryScroll();
+};
 
   // 🔹 Infinite scroll handler
   const onResultsScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -714,49 +1171,79 @@ useEffect(() => {
     setIsChatEmpty(false); // Make sure chat is not empty to show error
   }, [activeChatSessionId]); // Dependency on activeChatSessionId
 
-  // Core Function to Create a New Chat Session (DB only, no UI reset)
-  const createNewChatSession = useCallback(async () => {
+ // Core Function to Create a New Chat Session (DB only, no UI reset)
+const createNewChatSession = useCallback(async () => {
   const newSessionId = crypto.randomUUID();
 
   try {
-    const res = await fetch('/api/chat/new', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+    const res = await fetch("/api/chat/new", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId: newSessionId }),
     });
 
     if (!res.ok) {
       const errorData = await res.json();
-      throw new Error(errorData.message || 'Failed to create new chat session on the backend.');
+      throw new Error(
+        errorData.message ||
+          "Failed to create new chat session on the backend."
+      );
     }
 
     const newSessionData: ChatSession = await res.json();
+
+    // ✅ Set and remember the new active session (for reload persistence)
     setActiveChatSessionId(newSessionData.id);
-    setChatSessions(prev => [newSessionData, ...prev]);
+    localStorage.setItem("quirra_last_active_session", newSessionData.id);
+
+    // Add to sessions list immediately
+    setChatSessions((prev) => [newSessionData, ...prev]);
     console.log(`✅ New conversation session created: ${newSessionData.id}`);
+
+    // 🧠 Reset UI state for new chat
+    setMessages([]);
+    localStorage.removeItem(`quirra_chat_messages_${newSessionData.id}`);
+    setIsChatEmpty(true);
+
     return newSessionData.id;
   } catch (error: any) {
     console.error("❌ Error creating new chat session via API:", error.message);
-    displayInAppMessage(`Failed to start a new chat session: ${error.message}. You might not be able to save messages.`);
+    displayInAppMessage(
+      `Failed to start a new chat session: ${error.message}. You might not be able to save messages.`
+    );
+
+    // 🧩 Still set as active locally (for offline flow)
     setActiveChatSessionId(newSessionId);
+    localStorage.setItem("quirra_last_active_session", newSessionId);
+
+    setMessages([]);
+    localStorage.removeItem(`quirra_chat_messages_${newSessionId}`);
+    setIsChatEmpty(true);
+
     return newSessionId; // still return local ID so chat works
   }
 }, [displayInAppMessage]);
 
-  // Authentication and History Loading Function
-  const checkAuthAndLoadHistory = useCallback(async () => {
-    setIsInitialLoading(true);
+// ✅ Authentication + Initial History Loader (ChatGPT-like, final version)
+const checkAuthAndLoadHistory = useCallback(async () => {
+  // ⚡ Prevent redundant reload if chats are already in memory
+  if (chatSessions.length > 0 && activeChatSessionId) {
+    console.log("✅ Chat sessions already loaded, skipping reload.");
+    return;
+  }
 
+  setIsInitialLoading(true);
+
+  try {
+    // 1️⃣ Validate user session
     const {
       data: { session },
       error,
     } = await supabase.auth.getSession();
 
     if (error || !session) {
-      console.warn("No active session found or error fetching session:", error?.message);
-      router.push("/login"); // Redirect to login if no session
+      console.warn("⚠️ No session found or error fetching session:", error?.message);
+      router.push("/login");
       setIsInitialLoading(false);
       return;
     }
@@ -764,105 +1251,164 @@ useEffect(() => {
     const userId = session.user.id;
     setUserEmail(session.user.email ?? null);
 
-    // Fetch user profile data including daily_token_usage
-    let profileData: UserProfileData | null = null;
-    const { data: fetchedProfileData, error: profileError } = await supabase
+    // 2️⃣ Load user profile
+    const { data: fetchedProfile, error: profileError } = await supabase
       .from("profiles")
-      .select("username, full_name, personality_profile, daily_token_usage") // Include daily_token_usage
-      .eq('id', userId)
+      .select("username, full_name, personality_profile, daily_token_usage")
+      .eq("id", userId)
       .single();
 
-    if (profileError && profileError.code !== 'PGRST116') { // PGRST116 means no rows found, which is okay for new users
-      console.error("❌ Failed to load user profile:", profileError.message);
-    } else if (fetchedProfileData) {
-      profileData = fetchedProfileData as UserProfileData;
-      setDailyTokenUsage(profileData.daily_token_usage || 0); // Set daily token usage
+    if (profileError && profileError.code !== "PGRST116") {
+      console.error("❌ Failed to load profile:", profileError.message);
     }
 
-    // Determine display names based on available profile data
-    let resolvedDisplayUserName: string;
-    let resolvedChatbotUserName: string;
-
-    if (profileData?.personality_profile?.preferred_name) {
-      resolvedDisplayUserName = profileData.personality_profile.preferred_name;
-      resolvedChatbotUserName = profileData.personality_profile.preferred_name;
-    } else if (profileData?.full_name) {
-      resolvedDisplayUserName = profileData.full_name;
-      resolvedChatbotUserName = profileData.full_name.split(' ')[0] || "User"; // Use first name if full name exists
-    } else if (profileData?.username) {
-      resolvedDisplayUserName = profileData.username;
-      resolvedChatbotUserName = profileData.username;
-    } else {
-      const namePart = session.user.email?.split('@')[0] || "User";
-      resolvedDisplayUserName = namePart.replace(/[._]/g, ' ').split(' ')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-      resolvedChatbotUserName = resolvedDisplayUserName;
+    if (fetchedProfile) {
+      setDailyTokenUsage(fetchedProfile.daily_token_usage || 0);
     }
 
-    setDisplayUserName(resolvedDisplayUserName);
-    setChatbotUserName(resolvedChatbotUserName);
+    // 3️⃣ Determine display name
+    const preferred =
+      fetchedProfile?.personality_profile?.preferred_name ||
+      fetchedProfile?.full_name?.split(" ")[0] ||
+      fetchedProfile?.username ||
+      session.user.email?.split("@")[0] ||
+      "User";
 
-    // Load personality profile from local storage or fetched profile
-    const storedPersonalityProfile = localStorage.getItem('quirra_personality_profile');
-    const parsedStoredPersonalityProfile: PersonalityProfile | null = storedPersonalityProfile ? JSON.parse(storedPersonalityProfile) : null;
+    const displayName = preferred.replace(/[._]/g, " ");
+    setDisplayUserName(displayName);
+    setChatbotUserName(displayName);
 
-    let finalPersonalityProfile = profileData?.personality_profile || parsedStoredPersonalityProfile;
+    // 4️⃣ Handle personality profile
+    const storedProfile = localStorage.getItem("quirra_personality_profile");
+    const parsedStored = storedProfile ? JSON.parse(storedProfile) : null;
+    const finalProfile =
+      fetchedProfile?.personality_profile || parsedStored || null;
 
-    // Update local storage if a profile was fetched from DB
-    if (profileData?.personality_profile) {
-      localStorage.setItem('quirra_personality_profile', JSON.stringify(profileData.personality_profile));
-    } else if (!finalPersonalityProfile) { // Clear local storage if no profile found anywhere
-      localStorage.removeItem('quirra_personality_profile');
+    if (fetchedProfile?.personality_profile) {
+      localStorage.setItem(
+        "quirra_personality_profile",
+        JSON.stringify(fetchedProfile.personality_profile)
+      );
+    } else if (!finalProfile) {
+      localStorage.removeItem("quirra_personality_profile");
     }
-    setUserPersonalityProfile(finalPersonalityProfile);
+    setUserPersonalityProfile(finalProfile);
 
-    // Load Chat Sessions
-    const { data: sessionsData, error: sessionsError } = await supabase
+    // 5️⃣ Load user chat sessions
+    const { data: sessions, error: sessionsErr } = await supabase
       .from("chat_sessions")
       .select("id, title, created_at")
-      .eq('user_id', userId)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
-    if (sessionsError) {
-      console.error("❌ Failed to load chat sessions:", sessionsError.message);
-      displayInAppMessage("Failed to load your chat sessions. Please refresh the page.");
-    } else {
-      const sortedSessions = sessionsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      setChatSessions(sortedSessions);
-
-      if (sortedSessions.length > 0) {
-        // If sessions exist, load the latest one
-        setActiveChatSessionId(sortedSessions[0].id);
-        const { data: messagesData, error: fetchMessagesError } = await supabase
-          .from("messages")
-          .select("id, role, content, emotion_score, personality_profile, created_at, chat_session_id")
-          .eq('user_id', userId)
-          .eq('chat_session_id', sortedSessions[0].id)
-          .order("created_at", { ascending: true });
-
-        if (fetchMessagesError) {
-          console.error("❌ Failed to load messages for active session:", fetchMessagesError.message);
-          displayInAppMessage("Failed to load messages for your active chat. Please try switching sessions.");
-        } else {
-          setMessages(messagesData as ChatMessage[]);
-          // Set isChatEmpty based on loaded messages
-          setIsChatEmpty(messagesData.length === 0);
-        }
-      } else {
-       // No sessions — just show empty state
-       setActiveChatSessionId(null);
-       setMessages([]);
-       setIsChatEmpty(true);
-      }
+    if (sessionsErr) {
+      console.error("❌ Failed to load sessions:", sessionsErr.message);
+      displayInAppMessage("Failed to load chat sessions.");
+      setIsInitialLoading(false);
+      return;
     }
-    setIsInitialLoading(false);
-  }, [router, createNewChatSession, displayInAppMessage]); // Dependencies for useCallback
 
-  // Effect to run authentication and history loading on component mount
-  useEffect(() => {
-    checkAuthAndLoadHistory();
-  }, [checkAuthAndLoadHistory]);
+    if (!sessions || sessions.length === 0) {
+      console.log("🟡 No sessions found for user — starting fresh.");
+      setChatSessions([]);
+      setActiveChatSessionId(null);
+      setMessages([]);
+      localStorage.removeItem("quirra_chat_messages");
+      setIsChatEmpty(true);
+      setIsInitialLoading(false);
+      return;
+    }
+
+    // ✅ Sort and set sessions
+    const sortedSessions = sessions.sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    setChatSessions(sortedSessions);
+
+    // 🔹 Try to restore the last active session from localStorage
+    const lastActive = localStorage.getItem("quirra_last_active_session");
+    const restoreSession =
+      sortedSessions.find((s) => s.id === lastActive)?.id ||
+      sortedSessions[0].id;
+
+    setActiveChatSessionId(restoreSession);
+
+    // 6️⃣ Load messages for that session (merge local + server)
+    const { data: serverMessages, error: messagesErr } = await supabase
+      .from("messages")
+      .select(
+        "id, role, content, emotion_score, personality_profile, created_at, chat_session_id"
+      )
+      .eq("user_id", userId)
+      .eq("chat_session_id", restoreSession)
+      .order("created_at", { ascending: true });
+
+    if (messagesErr) {
+      console.error("❌ Failed to load messages:", messagesErr.message);
+      displayInAppMessage("Failed to load your chat messages.");
+      setMessages([]);
+      setIsChatEmpty(true);
+    } else {
+      // 🧠 Merge local cached messages (ChatGPT-like persistence)
+      let cached: ChatMessage[] = [];
+      try {
+        const raw = localStorage.getItem(`quirra_chat_messages_${restoreSession}`);
+        if (raw) cached = JSON.parse(raw);
+      } catch {
+        cached = [];
+      }
+
+      const map = new Map<string, ChatMessage>();
+      for (const msg of cached) map.set(msg.id, msg);
+      for (const msg of serverMessages) map.set(msg.id, msg);
+
+      const merged = Array.from(map.values()).sort(
+        (a, b) =>
+          new Date(a.created_at || "").getTime() -
+          new Date(b.created_at || "").getTime()
+      );
+
+      setMessages(merged);
+      setIsChatEmpty(merged.length === 0);
+
+      // 🗂️ Save merged messages locally (ChatGPT-style persistence)
+      localStorage.setItem(
+        `quirra_chat_messages_${restoreSession}`,
+        JSON.stringify(merged)
+      );
+      
+      // ✅ Load votes for all assistant messages in this session
+      await loadUserVotesForSession();
+
+    }
+  } catch (err: any) {
+    console.error("❌ Unexpected error in checkAuthAndLoadHistory:", err.message);
+    displayInAppMessage("An error occurred while loading your chat history.");
+
+    // Attempt to restore local messages if available
+    try {
+      const lastActive = localStorage.getItem("quirra_last_active_session");
+      const raw = localStorage.getItem(`quirra_chat_messages_${lastActive}`);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        setMessages(cached);
+        setIsChatEmpty(cached.length === 0);
+      }
+    } catch {
+      setMessages([]);
+      setIsChatEmpty(true);
+    }
+  } finally {
+    setIsInitialLoading(false);
+  }
+}, [router, chatSessions.length, activeChatSessionId, displayInAppMessage]);
+
+// ✅ Run once on mount (not on every state change)
+useEffect(() => {
+  checkAuthAndLoadHistory();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
 
   // Function to send message to API and save to Supabase
@@ -885,14 +1431,28 @@ useEffect(() => {
     let detectedEmotionScore: number | undefined;
 
     try {
+            // --- compute refinedPrompt (currently a 1:1 fallback to raw content)
+      // Later: if you expose an `activeCommand` variable here, you can apply
+      // a client-side COMMAND_PROMPT_MAP to create richer refined prompts.
+      const refinedPrompt = ((): string => {
+        // Example placeholder for future command-aware mapping:
+        // if (activeCommand && clientCommandPromptMap[activeCommand]) {
+        //   return clientCommandPromptMap[activeCommand](userMessageToProcess.content);
+        // }
+        return userMessageToProcess.content;
+      })();
+
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          // keep the original raw prompt for backward compatibility
           prompt: userMessageToProcess.content,
+          // new: refined prompt that the server will prefer when present
+          refinedPrompt,
           userName: chatbotUserName,
           personalityProfile: userPersonalityProfile,
-          messages: currentMessagesForContext.map(msg => ({
+          messages: currentMessagesForContext.map((msg) => ({
             role: msg.role,
             content: msg.content,
           })),
@@ -901,6 +1461,7 @@ useEffect(() => {
           currentMessageId: userMessageToProcess.id,
         }),
       });
+
 
       if (!res.ok || !res.body) {
         const errorText = await res.text();
@@ -1273,21 +1834,7 @@ const handleTextAreaKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>
   }
 };
 
-  // Handler for editing a specific user message
-  const handleEditMessage = (messageId: string) => {
-    if (isLoading) {
-      displayInAppMessage("Please wait for the current response to complete before editing.");
-      return;
-    }
-    const messageToEdit = messages.find(msg => msg.id === messageId && msg.role === 'user');
-    if (messageToEdit) {
-      setEditingMessageId(messageId); // Set message to be edited
-      setInput(messageToEdit.content); // Populate input with message content
-      textareaRef.current?.focus(); // Focus the textarea
-      // Move cursor to the end of the text
-      textareaRef.current?.setSelectionRange(messageToEdit.content.length, messageToEdit.content.length);
-    }
-  };
+
 
   // Handler for resetting the current chat (starts a new session)
   const handleUserReset = async () => {
@@ -1328,9 +1875,6 @@ const handleNewChat = useCallback(async () => {
     setEditingMessageId(null);
     setActiveChatSessionId(newSessionId);
     setIsChatEmpty(true);
-    setShowDailyFocusInput(false);
-    setShowMoodLogger(false);
-    setShowGoalSetting(false);
     setShowFloatingMenu(false);
 
     // optional: close sidebar so user sees the new (empty) chat area
@@ -1359,73 +1903,115 @@ const handleOpenFloatingProfile = () => {
   setShowSidebarProfileOptions(false);
 };
 
- // Handler for switching to a different chat session
-const handleSwitchChatSession = useCallback(async (sessionId: string) => {
-  if (isLoading) {
-    displayInAppMessage("Please wait for the current response to complete before switching chats.");
-    return;
-  }
+// ✅ Handler for switching to a different chat session (ChatGPT-like + persistent)
+const handleSwitchChatSession = useCallback(
+  async (sessionId: string) => {
+    if (isLoading || !sessionId) return;
 
-  if (sessionId === activeChatSessionId) {
-    setIsSidebarOpen(false);
-    return;
-  }
-
-  try {
-    setIsLoading(true);
-    setMessages([]);
-    setActiveChatSessionId(sessionId);
-    setEditingMessageId(null);
-    setIsChatEmpty(true);
-
-    setShowDailyFocusInput(false);
-    setShowMoodLogger(false);
-    setShowGoalSetting(false);
-
-    // Get messages for this session
-    const { data, error } = await supabase
-      .from("messages")
-      .select("id, role, content, created_at") // select only what you need
-      .eq("chat_session_id", sessionId)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      console.error(`❌ Failed to load history for session ${sessionId}:`, error.message);
-      displayInAppMessage("Failed to load chat history. Please try again.");
-    } else if (data && data.length > 0) {
-      console.log("✅ Loaded messages:", data);
-      setMessages(data as ChatMessage[]);
-      setIsChatEmpty(false);
-    } else {
-      console.warn("⚠️ No messages found for session:", sessionId);
-      setIsChatEmpty(true);
+    // If already viewing this chat, just close the sidebar
+    if (sessionId === activeChatSessionId) {
+      setIsSidebarOpen(false);
+      return;
     }
-  } catch (err: any) {
-    console.error("❌ Unexpected error while switching chat session:", err.message);
-    displayInAppMessage("An error occurred while loading this chat. Please try again.");
-  } finally {
-    setIsLoading(false);
-    setIsSidebarOpen(false);
-    setShowSessionOptionsForId(null);
-  }
-}, [isLoading, activeChatSessionId, displayInAppMessage]);
 
+    setIsLoading(true);
+    console.log("🌀 Switching to chat session:", sessionId);
 
-  // Function to rename a chat session (uses custom modal)
-  const renameChatSession = useCallback(async (sessionId: string, currentTitle: string) => {
+    try {
+      // Get current logged-in user
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) {
+        displayInAppMessage("You must be logged in to view chats.");
+        setIsLoading(false);
+        return;
+      }
+
+      // Fetch server messages
+      const { data: serverMessages, error } = await supabase
+        .from("messages")
+        .select("id, role, content, created_at, chat_session_id")
+        .eq("chat_session_id", sessionId)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error("❌ Error loading chat:", error.message);
+        displayInAppMessage("Failed to load chat. Please try again.");
+        setIsLoading(false);
+        return;
+      }
+
+      // 🧠 Merge server + local messages (for persistence like ChatGPT)
+      let cached: ChatMessage[] = [];
+      try {
+        const raw = localStorage.getItem(`quirra_chat_messages_${sessionId}`);
+        if (raw) cached = JSON.parse(raw);
+      } catch {
+        cached = [];
+      }
+
+      const map = new Map<string, ChatMessage>();
+      for (const msg of cached) map.set(msg.id, msg);
+      for (const msg of serverMessages || []) map.set(msg.id, msg);
+
+      const merged = Array.from(map.values()).sort(
+        (a, b) =>
+          new Date(a.created_at || "").getTime() -
+          new Date(b.created_at || "").getTime()
+      );
+
+      // ✅ Update UI
+      setMessages([]); // Clear instantly for smooth transition
+      requestAnimationFrame(() => {
+        setMessages(merged);
+        setIsChatEmpty(merged.length === 0);
+        setActiveChatSessionId(sessionId);
+      });
+
+      // 💾 Save last active session
+      localStorage.setItem("quirra_last_active_session", sessionId);
+
+      // 💾 Save merged messages locally
+      localStorage.setItem(
+        `quirra_chat_messages_${sessionId}`,
+        JSON.stringify(merged)
+      );
+
+      // Smooth scroll to bottom
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 150);
+    } catch (err: any) {
+      console.error("❌ Unexpected error while switching chat:", err);
+      displayInAppMessage("An unexpected error occurred.");
+    } finally {
+      setIsLoading(false);
+      setIsSidebarOpen(false);
+      setShowSessionOptionsForId(null);
+    }
+  },
+  [isLoading, activeChatSessionId, displayInAppMessage]
+);
+
+// ✅ Function to rename a chat session (ChatGPT-like, with modal)
+const renameChatSession = useCallback(
+  async (sessionId: string, currentTitle: string) => {
     if (isLoading) {
-      displayInAppMessage("Please wait for the current response to complete before renaming chats.");
-      return false; // Indicate that modal was not opened
+      displayInAppMessage(
+        "Please wait for the current response to complete before renaming chats."
+      );
+      return false;
     }
 
     setModalState({
       isOpen: true,
-      type: 'prompt',
-      title: 'Rename Chat Session',
-      message: 'Enter a new name for this chat session:',
+      type: "prompt",
+      title: "Rename Chat Session",
+      message: "Enter a new name for this chat session:",
       inputValue: currentTitle,
       onConfirm: async (newTitle?: string) => {
-        setModalState(prev => ({ ...prev, isOpen: false })); // Close modal immediately
+        setModalState((prev) => ({ ...prev, isOpen: false }));
         if (!newTitle || !newTitle.trim()) {
           displayInAppMessage("Session title cannot be empty. Rename cancelled.");
           return false;
@@ -1433,108 +2019,165 @@ const handleSwitchChatSession = useCallback(async (sessionId: string) => {
 
         setIsLoading(true);
         try {
-          const { data: { session } } = await supabase.auth.getSession();
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
           const userId = session?.user?.id;
 
           if (!userId) {
-            console.warn("User ID not available, cannot rename chat session.");
             displayInAppMessage("Error: User not logged in. Cannot rename chat session.");
             return false;
           }
 
+          // ✅ Update in DB
           const { error } = await supabase
             .from("chat_sessions")
             .update({ title: newTitle.trim() })
             .eq("id", sessionId)
-            .eq('user_id', userId); // Ensure user owns the session
+            .eq("user_id", userId);
 
           if (error) {
             throw new Error(`Failed to rename session: ${error.message}`);
           }
-          console.log(`Session ${sessionId} renamed to "${newTitle.trim()}" successfully.`);
 
-          // Update the title in local state immediately
-          setChatSessions(prevSessions =>
-            prevSessions.map(sessionItem =>
-              sessionItem.id === sessionId ? { ...sessionItem, title: newTitle.trim() } : sessionItem
+          // ✅ Update in local state
+          setChatSessions((prev) =>
+            prev.map((session) =>
+              session.id === sessionId ? { ...session, title: newTitle.trim() } : session
             )
           );
+
+          console.log(`✏️ Chat renamed: ${newTitle.trim()}`);
           return true;
         } catch (err: any) {
-          console.error("❌ Error renaming chat session:", err.message);
-          displayInAppMessage(`Failed to rename chat session: ${err.message}`);
+          console.error("❌ Error renaming chat:", err.message);
+          displayInAppMessage(`Failed to rename chat: ${err.message}`);
           return false;
         } finally {
           setIsLoading(false);
-          setShowSessionOptionsForId(null); // Close the options menu
+          setShowSessionOptionsForId(null);
         }
       },
       onCancel: () => {
-        setModalState(prev => ({ ...prev, isOpen: false })); // Close modal on cancel
-      }
+        setModalState((prev) => ({ ...prev, isOpen: false }));
+      },
     });
 
-    return true; // Indicate that modal was opened
-  }, [isLoading, displayInAppMessage]); // Dependencies for useCallback
+    return true;
+  },
+  [isLoading, displayInAppMessage]
+);
 
-  // Handler for deleting a chat session (uses custom modal for confirmation)
-  const handleDeleteChatSession = useCallback(async (sessionIdToDelete: string) => {
+
+ // ✅ Handler for deleting a chat session (ChatGPT-like + persistent cleanup)
+const handleDeleteChatSession = useCallback(
+  async (sessionIdToDelete: string) => {
     if (isLoading) {
-      displayInAppMessage("Please wait for the current response to complete before deleting chats.");
+      displayInAppMessage(
+        "Please wait for the current response to complete before deleting chats."
+      );
       return;
     }
 
     setModalState({
       isOpen: true,
-      type: 'confirm',
-      title: 'Delete Chat Session',
-      message: 'Are you sure you want to delete this chat session and all its messages? This cannot be undone.',
+      type: "confirm",
+      title: "Delete Chat Session",
+      message:
+        "Are you sure you want to delete this chat session and all its messages? This cannot be undone.",
       onConfirm: async () => {
-        setModalState(prev => ({ ...prev, isOpen: false })); // Close modal immediately
+        setModalState((prev) => ({ ...prev, isOpen: false }));
         setIsLoading(true);
 
         try {
-          const { data: { session } } = await supabase.auth.getSession();
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
           const userId = session?.user?.id;
 
           if (!userId) {
-          console.warn("User ID not available, cannot delete chat session.");
-            displayInAppMessage("Error: User not logged in. Cannot delete chat session.");
+            console.warn("User ID not available, cannot delete chat session.");
+            displayInAppMessage(
+              "Error: User not logged in. Cannot delete chat session."
+            );
             return;
           }
 
+          // 🗑️ Delete from Supabase
           const { error: sessionDeleteError } = await supabase
             .from("chat_sessions")
             .delete()
-            .eq('user_id', userId)
-            .eq('id', sessionIdToDelete); // Ensure user owns the session
+            .eq("user_id", userId)
+            .eq("id", sessionIdToDelete);
 
           if (sessionDeleteError) {
-            throw new Error(`Failed to delete chat session: ${sessionDeleteError.message}`);
+            throw new Error(
+              `Failed to delete chat session: ${sessionDeleteError.message}`
+            );
           }
 
-          console.log(`Chat session ${sessionIdToDelete} and its messages deleted.`);
+          console.log(`🗑️ Chat session ${sessionIdToDelete} and its messages deleted.`);
 
-          // Update local state: remove the deleted session
-          setChatSessions(prev => prev.filter(session => session.id !== sessionIdToDelete));
+          // 🧹 Local cleanup
+          localStorage.removeItem(`quirra_chat_messages_${sessionIdToDelete}`);
+
+          // If this was the active chat, also clear the last-active pointer
+          const lastActive = localStorage.getItem("quirra_last_active_session");
+          if (lastActive === sessionIdToDelete) {
+            localStorage.removeItem("quirra_last_active_session");
+          }
+
+          // Update local state (remove deleted session)
+          setChatSessions((prev) =>
+            prev.filter((session) => session.id !== sessionIdToDelete)
+          );
+
+          // 🔄 If the deleted session was the active one
           if (activeChatSessionId === sessionIdToDelete) {
-            // If the active session was deleted, start a new one
-            await createNewChatSession();
-            setIsChatEmpty(true); // Reset to empty chat state
+            if (chatSessions.length > 1) {
+              // Switch to another existing session
+              const nextSession =
+                chatSessions.find((s) => s.id !== sessionIdToDelete)?.id || null;
+              if (nextSession) {
+                await handleSwitchChatSession(nextSession);
+              } else {
+                await createNewChatSession();
+              }
+            } else {
+              // No other sessions → start fresh
+              await createNewChatSession();
+            }
+
+            setIsChatEmpty(true);
+
+            // 🩵 If all chats are gone, show greeting instantly (no flicker)
+            if (chatSessions.length <= 1) setMessages([]);
           }
+
+          console.log("✅ Chat session deleted and UI updated successfully.");
         } catch (err: any) {
           console.error("❌ Error deleting chat session:", err.message);
           displayInAppMessage(`Failed to delete chat session: ${err.message}`);
         } finally {
           setIsLoading(false);
-          setShowSessionOptionsForId(null); // Hide options menu
+          setShowSessionOptionsForId(null);
         }
       },
       onCancel: () => {
-        setModalState(prev => ({ ...prev, isOpen: false })); // Close modal on cancel
-      }
+        setModalState((prev) => ({ ...prev, isOpen: false }));
+      },
     });
-  }, [isLoading, activeChatSessionId, createNewChatSession, displayInAppMessage]); // Dependencies for useCallback
+  },
+  [
+    isLoading,
+    activeChatSessionId,
+    chatSessions,
+    createNewChatSession,
+    handleSwitchChatSession,
+    displayInAppMessage,
+  ]
+);
+
 
  // Handler for user logout
 const handleLogout = async () => {
@@ -1634,24 +2277,46 @@ const handlePhotoChange = (files: FileList) => {
   setPendingFiles((prev) => [...prev, ...newPhotos]);
 };
 
-  // Show loading scconst handleSendMessage = async () => {
-  if (isInitialLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-blue-900 flex items-center justify-center p-4">
-        <Loader2 className="animate-spin text-blue-400" size={48} />
-        <p className="text-white text-xl ml-4">Loading your profile and history...</p>
-      </div>
-    );
-  }
+// While loading initial data (auth, sessions, etc.)
+if (isInitialLoading) {
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key="initial-loader"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.6, ease: "easeOut" }}
+        className="fixed inset-0 flex flex-col items-center justify-center bg-transparent z-50"
+      >
+        {/* 💫 Smooth pulsing orb */}
+        <motion.div
+          animate={{
+            scale: [1, 1.1, 1],
+            opacity: [0.6, 1, 0.6],
+          }}
+          transition={{
+            duration: 1.6,
+            ease: "easeInOut",
+            repeat: Infinity,
+          }}
+          className="w-10 h-10 rounded-full bg-gradient-to-r from-indigo-400 to-violet-400 shadow-lg"
+        />
 
-  // Show personality onboarding if profile is not set
-  if (!userPersonalityProfile) {
-    return (
-      <div className="min-h-screen bg-[#0A0B1A] flex items-center justify-center p-4">
-        <PersonalityOnboarding onComplete={handleOnboardingComplete} />
-      </div>
-    );
-  }
+        {/* 🩶 Subtle loading text */}
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.7 }}
+          exit={{ opacity: 0 }}
+          transition={{ delay: 0.8, duration: 0.8, ease: "easeOut" }}
+          className="text-gray-400 text-sm mt-6 tracking-wide select-none"
+        >
+          Loading Quirra...
+        </motion.p>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
 
   // Main chat application UI
   return (
@@ -1755,12 +2420,12 @@ const handlePhotoChange = (files: FileList) => {
       </button>
 
       <button
-        onClick={() => setActiveMainView("journey")}
+          onClick={() => setActiveMainView("journey")}
         className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-800 text-gray-300 hover:text-white transition-colors"
         title="My Journey"
-      >
-        <JourneyIcon state={userJourneyState} />
-      </button>
+     >
+       <JourneyIcon state={userJourneyState} />
+     </button>
     </div>
 
     {/* Spacer */}
@@ -1805,36 +2470,41 @@ const handlePhotoChange = (files: FileList) => {
 
   {/* === Sidebar Content === */}
   <div className="relative z-10 flex flex-col flex-1 text-gray-300">
-    {/* Header */}
-    <div className="p-4 flex items-center justify-between">
-      <span className="text-[#E6F1FF] text-base font-semibold tracking-wide drop-shadow-[0_0_10px_#00C0FF33]">
-        Quirra
-      </span>
-      <button
-        onClick={() => setIsSidebarOpen(false)}
-        className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#1B2238] text-gray-400 hover:text-white transition-colors"
-      >
-        <MenuIcon size={18} />
-      </button>
-    </div>
+  
+<div className="p-4 flex items-center justify-between">
+  <div onClick={() => handleNewChat()} className="cursor-pointer select-none">
+    <img
+      src="/logo.png.png"
+      alt="Quirra Logo"
+      className="h-8 w-auto object-contain"
+    />
+  </div>
+
+  <button
+    onClick={() => setIsSidebarOpen(false)}
+    className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-[#1B2238] text-gray-400 hover:text-white transition-colors"
+  >
+    <MenuIcon size={18} />
+  </button>
+</div>
 
    {/* === Actions === */}
-<div className="px-3 flex flex-col gap-0.5 mt-2">
+<div className="px-3 flex flex-col gap-[2px] mt-2">
   <button
     onClick={() => handleNewChat()}
-    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
+    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
   >
     <PenSquare size={15} /> New Chat
   </button>
   <button
     onClick={() => setIsSearchOpen(true)}
-    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
+    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
   >
     <Search size={15} /> Search Chats
   </button>
   <button
     onClick={() => console.log("Open library")}
-    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
+    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-left text-[12.5px] text-gray-300 hover:bg-[#1C243A] hover:text-white transition-colors"
   >
     <Library size={15} /> Library
   </button>
@@ -1941,36 +2611,41 @@ const handlePhotoChange = (files: FileList) => {
 </div>
 
 {showSettingsDropdown && (
-  <SettingsDropdown
-    onClose={() => setShowSettingsDropdown(false)}
-    onLogout={handleLogout}
-    onClearHistory={handleDeleteChatHistory}
-    onThemeToggle={toggleTheme}
-    currentTheme={theme}
-  />
+  (() => {
+    const settingsProps = {
+      onClose: () => setShowSettingsDropdown(false),
+      onLogout: handleLogout,
+      onClearHistory: handleDeleteChatHistory,
+      onThemeToggle: toggleTheme,
+      currentTheme: theme,
+    } as any;
+    return <SettingsDropdown {...settingsProps} />;
+  })()
 )}
+
 
       {/* Main Content Area */}
        <main
-        className={`relative flex-1 flex flex-col transition-all duration-300 ease-in-out`}
+        className={`relative flex-1 flex flex-col min-h-0 transition-all duration-300 ease-in-out`}
         // Dynamically set marginLeft based on sidebar state
         style={{
           marginLeft: isSidebarOpen ? SIDEBAR_WIDTH : '64px',
         }}
       >  
-        {activeMainView === 'journey' ? (
-        <JourneyPage state={userJourneyState} />
+      {activeMainView === 'journey' ? (
+       <JourneyPage />
       ) : activeMainView === 'library' ? (
-        <LibraryPage />
+      <LibraryPage />
       ) : (
         <>
-        {/* 👇 keep your entire existing chat UI here */}
-        {/* messages list, streaming renderer, input area, overlays, etc. */}
-       </>
-      )}
+      {/* chat */}
+     </>
+  )}
 
-      {/* 🔍 Quirra Search Dropdown Overlay */}
-      <QuirraSearchDropdown
+      
+
+     {/* 🔍 Quirra Search Dropdown Overlay */}
+     <QuirraSearchDropdown
         isOpen={isSearchOpen}
         searchQuery={searchQuery}
         searchResults={searchResults}
@@ -1980,411 +2655,147 @@ const handlePhotoChange = (files: FileList) => {
         onQueryChange={(v) => setSearchQuery(v)}
         onResultClick={handleResultClick}
         onScroll={onResultsScroll}
-        context={searchContext}
-        onContextChange={setSearchContext}
-     />
+    />
 
 
-        {/* Daily Focus Input Rendered Conditionally with close button */}
-        {activeMainView === 'chat' && showDailyFocusInput && (
-          <div className="w-full max-w-4xl mx-auto px-4 py-4 animate-fadeIn">
-            <div className="relative">
-              <DailyFocusInput />
-              <button
-                onClick={() => setShowDailyFocusInput(false)}
-                className="absolute top-2 right-2 text-gray-400 hover:text-white transition-colors p-1"
-                aria-label="Close Daily Focus"
-              >
-                <XCircle size={24} />
-              </button>
-            </div>
-          </div>
-        )}
 
-        {/* Mood Logger Rendered Conditionally with close button */}
-        {activeMainView === 'chat' && showMoodLogger && (
-          <div className="w-full max-w-4xl mx-auto px-4 py-4 animate-fadeIn">
-            <div className="relative">
-              <MoodLogger />
-              <button
-                onClick={() => setShowMoodLogger(false)}
-                className="absolute top-2 right-2 text-gray-400 hover:text-white transition-colors p-1"
-                aria-label="Close Mood Logger"
-              >
-                <XCircle size={24} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Goal Setting Rendered Conditionally with close button */}
-        {activeMainView === 'chat' && showGoalSetting && ( 
-          <div className="w-full max-w-4xl mx-auto px-4 py-4 animate-fadeIn">
-            <div className="relative">
-              <GoalSetting />
-              <button
-                onClick={() => setShowGoalSetting(false)}
-                className="absolute top-2 right-2 text-gray-400 hover:text-white transition-colors p-1"
-                aria-label="Close Goal Setting"
-              >
-                <XCircle size={24} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 🧠 Main Chat Display Area */}
-        <div
-          ref={messagesContainerRef}
-          className="flex-1 overflow-y-auto px-4 py-6 max-w-4xl mx-auto w-full flex flex-col custom-scrollbar scroll-smooth pb-[100px] min-h-0"
-        >
-          <div className="flex flex-col gap-4">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  id={`message-${msg.id}`} // 🔹 add this line
-                  className={`group relative px-4 py-3 rounded-xl max-w-[90%] text-base leading-relaxed break-words animate-fadeIn mb-6 transition-colors duration-700 ${
-                    msg.role === "user"
-                      ? "bg-[#131422] text-white self-end rounded-br-none shadow-sm max-w-[75%]"
-                      : "bg-transparent text-gray-200 self-start"
-                  } ${highlightedMessageId === msg.id ? "bg-blue-500/20" : ""}`}
-                >
-                  {/* Loading indicator for assistant */}
-                  {msg.role === "assistant" && msg.content === "" && (isLoading || isRegenerating) ? (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.5 }}
-                      className="flex justify-center items-center py-6"
-                    >
-                      <ThinkingOrb isThinking={true} size={33} />
-                    </motion.div>
-                  ) : (
-                    <Fragment>
-                      
-                      {/* Message content (rendered above toolbars) */}
-                      <ReactMarkdown
-                        components={{
-                          code({ node, inline, className, children, ...props }: CodeProps) {
-                            const match = /language-(\w+)/.exec(className || "");
-                            const codeText = String(children).replace(/\n$/, "");
-                            const copyId = `code-${msg.id}-${match?.[1] || "default"}`;
-                            const isCopied = copiedMessageId === copyId;
-
-                            return !inline && match ? (
-                              <div className="relative rounded-lg bg-gray-800 font-mono text-sm my-3 shadow border border-gray-700 overflow-hidden">
-                                <div className="flex justify-between items-center px-4 py-2 bg-gray-700/70 text-xs text-gray-300 border-b border-gray-700">
-                                  <span>{match[1].toUpperCase()}</span>
-                                  <button
-                                    onClick={() => copyToClipboard(codeText, copyId)}
-                                    className="text-gray-400 hover:text-white flex items-center gap-1 p-1 rounded hover:bg-gray-600 transition-colors"
-                                    aria-label={isCopied ? "Code copied" : "Copy code"}
-                                  >
-                                    {isCopied ? (
-                                      <Check size={14} className="text-green-400" />
-                                    ) : (
-                                      <Copy size={14} />
-                                    )}
-                                    {isCopied ? "Copied!" : "Copy code"}
-                                  </button>
-                                </div>
-                                <div className="p-4 overflow-x-auto custom-scrollbar max-h-96">
-                                  <SyntaxHighlighter
-                                    style={dark}
-                                    language={match[1]}
-                                    PreTag="pre"
-                                    customStyle={{
-                                      background: "transparent",
-                                      padding: "0",
-                                      margin: "0",
-                                      whiteSpace: "pre-wrap",
-                                      wordBreak: "break-word",
-                                    }}
-                                    wrapLines={true}
-                                    {...props}
-                                  >
-                                    {codeText}
-                                  </SyntaxHighlighter>
-                                </div>
-                              </div>
-                            ) : (
-                              <code
-                                className="bg-gray-700/50 px-1 py-0.5 rounded text-sm font-mono"
-                                {...props}
-                              >
-                                {children}
-                              </code>
-                            );
-                          },
-                          a: ({ node, ...props }) => {
-                            const href = props.href || "";
-                            // robust image detection that handles query params
-                            let isImage = false;
-                            try {
-                              const u = new URL(href);
-                              isImage = /\.(png|jpg|jpeg|gif|webp)$/i.test(u.pathname);
-                            } catch {
-                              isImage = /\.(png|jpg|jpeg|gif|webp)(\?.*)?$/i.test(href);
-                            }
-        
-                            if (isImage) {
-                              return (
-                                <img
-                                  src={href}
-                                  alt={props.children?.toString() || "uploaded image"}
-                                  className="rounded-lg max-w-xs border border-gray-700 mt-2"
-                               />
-                              );
-                            }
-
-                            return (
-                              <a
-                                {...props}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-400 underline flex items-center gap-2"
-                              >
-                                📎 {props.children}
-                              </a>
-                            );
-                          },
-                          p: ({ node, ...props }) => (
-                            <p
-                              {...props}
-                              className="mb-2 last:mb-0 text-[15px] leading-relaxed text-gray-200"
-                           />
-                          ),
-                          ul: ({ node, ...props }) => (
-                            <ul
-                              {...props}
-                              className="list-disc list-inside mb-2 last:mb-0 ml-4 text-[15px] leading-relaxed text-gray-200"
-                           />
-                          ),
-                          ol: ({ node, ...props }) => (
-                            <ol
-                               {...props}
-                               className="list-decimal list-inside mb-2 last:mb-0 ml-4 text-[15px] leading-relaxed"
-                           />
-                          ),
-                          li: ({ node, ...props }) => (
-                             <li {...props} className="mb-1 text-[15px] leading-relaxed" />
-                          ),
-                          h1: ({ node, ...props }) => (
-                             <h1 {...props} className="text-xl font-bold mt-4 mb-2 text-white" />
-                          ),
-                          h2: ({ node, ...props }) => (
-                             <h2 {...props} className="text-lg font-semibold mt-3 mb-2 text-white" />
-                          ),
-                          h3: ({ node, ...props }) => (
-                             <h3 {...props} className="text-base font-semibold mt-2 mb-1 text-white" />
-                          ),
-                          blockquote: ({ node, ...props }) => (
-                            <blockquote
-                              {...props}
-                              className="border-l-4 border-gray-500 pl-4 italic text-gray-300 my-2"
-                           />
-                          ),
-                          table: ({ node, ...props }) => (
-                            <table
-                              {...props}
-                              className="table-auto w-full my-2 text-left border-collapse border border-gray-700"
-                           />
-                          ),
-                          th: ({ node, ...props }) => (
-                             <th
-                             {...props}
-                             className="px-4 py-2 border border-gray-700 bg-gray-700 font-semibold"
-                           />
-                          ),
-                          td: ({ node, ...props }) => (
-                             <td {...props} className="px-4 py-2 border border-gray-700" />
-                          ),
-                          strong: ({ node, ...props }) => (
-                             <strong {...props} className="font-semibold text-gray-100" />
-                          ),
-                          em: ({ node, ...props }) => (
-                             <em {...props} className="italic text-gray-200" />
-                          ),
-                        }}
-                        remarkPlugins={[remarkGfm]}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
-
-                      {/* User toolbar (below message, right aligned, outside bubble) */}
-                     {msg.role === "user" && (
-                       <div className="absolute -bottom-6 right-0 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                         <IconButton
-                           title="Edit message"
-                           aria-label="Edit message"
-                           onClick={() => handleEditMessage(msg.id)}
-                           disabled={isLoading}
-                         >
-                           <Edit size={18} strokeWidth={1.75} />
-                         </IconButton>
-
-                         <IconButton
-                           title="Copy message"
-                           aria-label="Copy message"
-                           onClick={() => copyToClipboard(msg.content, msg.id)}
-                         >
-                           {copiedMessageId === msg.id ? (
-                             <Check size={18} className="text-green-400" />
-                           ) : (
-                             <Copy size={18} strokeWidth={1.75} />
-                           )}
-                         </IconButton>
-                       </div>
-                     )}
-
-                      {/* Assistant toolbar (below message, left aligned) */}
-                      {msg.role === "assistant" && (
-                        <div className="flex space-x-1 mt-2 opacity-0 group-hover:opacity-100 transition-all duration-200 ease-out">
-                          <IconButton title="Copy" aria-label="Copy message" onClick={() => copyToClipboard(msg.content, msg.id)}>
-                            <Copy size={18} strokeWidth={1.75} />
-                          </IconButton>
-
-                          <IconButton
-                            title="Good response"
-                            aria-label="Thumbs up"
-                            onClick={async () => {
-                              try {
-                                await supabase.from("feedback").insert({ message_id: msg.id, vote: "up" });
-                                setMessageVotes((prev) => ({ ...prev, [msg.id]: "up" }));
-                              } catch (err) {
-                                console.error("Failed to save feedback:", err);
-                              }
-                            }}
-                            disabled={messageVotes[msg.id] === "up"}
-                            className={messageVotes[msg.id] === "up" ? "text-gray-300" : "hover:text-gray-400"}
-                          >
-                            <ThumbsUp size={18} strokeWidth={1.75} />
-                          </IconButton>
-
-                          <IconButton
-                            title="Bad response"
-                            aria-label="Thumbs down"
-                            onClick={async () => {
-                              try {
-                                await supabase.from("feedback").insert({ message_id: msg.id, vote: "down" });
-                                setMessageVotes((prev) => ({ ...prev, [msg.id]: "down" }));
-                              } catch (err) {
-                                console.error("Failed to save feedback:", err);
-                              }
-                            }}
-                            disabled={messageVotes[msg.id] === "down"}
-                            className={messageVotes[msg.id] === "down" ? "text-gray-300" : "hover:text-gray-400"}
-                          >
-                            <ThumbsDown size={18} strokeWidth={1.75} />
-                          </IconButton>
-
-                          <IconButton
-                            title="Share"
-                            aria-label="Share message"
-                            onClick={async () => {
-                              try {
-                                const { data, error } = await supabase
-                                  .from("shared_messages")
-                                  .insert({ message_id: msg.id, content: msg.content })
-                                  .select()
-                                  .single();
-                                if (error) throw error;
-
-                                const shareUrl = `${window.location.origin}/share/${data.id}`;
-                                await navigator.clipboard.writeText(shareUrl);
-                                toast.success("Link copied to clipboard!");
-                              } catch (err) {
-                                toast.error("Failed to share message");
-                              }
-                            }}
-                          >
-                            <Upload size={18} strokeWidth={1.75} />
-                          </IconButton>
-
-                          <IconButton
-                            title="Regenerate"
-                            aria-label="Regenerate response"
-                            onClick={() => {
-                              const lastUserMessage = messages
-                                .slice(0, messages.findIndex((m) => m.id === msg.id))
-                                .reverse()
-                                .find((m) => m.role === "user");
-
-                              if (lastUserMessage) {
-                                setInput(lastUserMessage.content);
-                                setEditingMessageId(lastUserMessage.id);
-                                setIsRegenerating(true);
-                                handleSendMessage();
-                              }
-                            }}
-                            disabled={isRegenerating}
-                          >
-                            {isRegenerating ? <Loader2 size={18} className="animate-spin text-gray-400" /> : <RotateCcw size={18} strokeWidth={1.75} />}
-                          </IconButton>
-                        </div>
-                      )}
-                    </Fragment>
-                  )}
-
-                  {/* Emotion score badge (absolute) */}
-                  {msg.role === "user" && typeof msg.emotion_score === "number" && (
-                    <div className="absolute -bottom-2 -left-2 text-sm opacity-90 flex items-center justify-center w-6 h-6 rounded-full bg-gray-700/70 backdrop-blur-sm shadow-md border border-gray-600">
-                      {msg.emotion_score > 0.1 ? (
-                        <Laugh className="text-green-400" size={16} aria-label="Feeling positive" />
-                      ) : msg.emotion_score < -0.1 ? (
-                        <Frown className="text-red-400" size={16} aria-label="Feeling negative" />
-                      ) : (
-                        <Meh className="text-yellow-400" size={16} aria-label="Feeling neutral" />
-                      )}
-                    </div>
-                  )}
-                </div> 
-              ))} 
-             <div ref={messagesEndRef} /> {/* Scroll target */}
-          </div>
-          
-          {/* 🔹 Optional Fade at the bottom */}
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-[#0B0C1A] to-transparent" />
-        </div>  
-
-     {/* 🧠 Greeting + ChatInput (Unified & Centered like ChatGPT) */}
+{/* 💬 Main Chat Area */}
 {activeMainView === "chat" && (
   <motion.div
     layout
     transition={{ type: "spring", stiffness: 200, damping: 25 }}
-    className={`absolute inset-0 flex flex-col items-center ${
-      isChatEmpty ? "justify-center" : "justify-end pb-4"
-    } z-20`}
+    className="relative flex flex-col min-h-screen w-full overflow-hidden z-20 bg-transparent"
   >
-    <div className="w-full max-w-[740px] px-4">
-      {isChatEmpty && (
+    {/* When chat is empty */}
+    {isChatEmpty ? (
+      <div className="flex flex-col items-center justify-center flex-1 px-0 text-center overflow-hidden">
         <motion.h1
+          key={randomGreeting}
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: "easeOut" }}
-          className="text-2xl md:text-3xl font-semibold text-center mb-14 mt-[-120px] bg-gradient-to-r from-indigo-400 to-violet-400 text-transparent bg-clip-text"
+          className="text-2xl md:text-3xl font-semibold mb-12 bg-gradient-to-r from-indigo-400 to-violet-400 text-transparent bg-clip-text"
         >
-          How can I help you today?
+          {randomGreeting}
         </motion.h1>
-      )}
 
-      <ChatInput
-        input={input}
-        setInput={setInput}
-        isLoading={isLoading}
-        isRegenerating={isRegenerating}
-        isChatEmpty={isChatEmpty}
-        handleSubmit={handleSubmit}
-        onFileSelect={(files) => handleFileChange({ target: { files } } as any)}
-        onSetDailyFocus={() => setShowDailyFocusInput(true)}
-        onSetGoal={() => setShowGoalSetting(true)}
-        onLogMood={() => setShowMoodLogger(true)}
-        onQuickAction={(action) => console.log("Quick action:", action)}
-      />
-    </div>
+        <div className="mx-auto w-full max-w-3xl px-3 sm:px-4 md:px-6 lg:px-0">
+          <ChatInput
+            input={input}
+            setInput={setInput}
+            isLoading={isLoading}
+            isRegenerating={isRegenerating}
+            isChatEmpty={isChatEmpty}
+            handleSubmit={handleSubmit}
+            onFileSelect={(files) =>
+              handleFileChange({ target: { files } } as any)
+            }
+            onQuickAction={(action) => console.log("Quick action:", action)}
+            ariaLabel="Message input"
+            className="w-full"
+          />
+        </div>
+      </div>
+    ) : (
+      <>
+        {/* Messages container (ChatGPT-like layout) */}
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 sm:px-4 md:px-6 lg:px-0 pb-[150px] scroll-smooth bg-transparent"
+          style={{
+            overscrollBehavior: "contain",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
+          <div className="mx-auto w-full max-w-3xl flex flex-col gap-6 pt-6">
+            {/* ✅ Updated messages loop */}
+            {messages.map((msg) => {
+              const convertEmojis = (text: string = "") =>
+                String(text)
+                  .replace(/:smile:/gi, "😄")
+                  .replace(/:laughing:/gi, "😆")
+                  .replace(/:thumbsup:/gi, "👍")
+                  .replace(/:thumbsdown:/gi, "👎")
+                  .replace(/:rocket:/gi, "🚀")
+                  .replace(/:fire:/gi, "🔥")
+                  .replace(/:heart:/gi, "❤️")
+                  .replace(/:check:/gi, "✅")
+                  .replace(/:x:/gi, "❌")
+                  .replace(/:wave:/gi, "👋")
+                  .replace(/:thinking:/gi, "🤔")
+                  .replace(/:\)/g, "🙂")
+                  .replace(/:-\)/g, "🙂")
+                  .replace(/:\(/g, "🙁")
+                  .replace(/:-\(/g, "🙁")
+                  .replace(/;-\)|;\)/g, "😉");
+
+              const content = convertEmojis(msg.content || "");
+
+              return (
+                <motion.div
+                  key={msg.id}
+                  id={`message-${msg.id}`}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.28, ease: "easeOut" }}
+                  className={`w-full flex ${
+                    msg.role === "user" ? "justify-end" : "justify-start"
+                  }`}
+                >
+                  <MessageToolbar
+                    messageId={msg.id}
+                    role={msg.role}
+                    content={content}
+                    onCopy={copyToClipboard}
+                    onShare={shareMessage}
+                    onLike={handleLike}
+                    onDislike={handleDislike}
+                    onRegenerate={regenerateResponse}
+                    onSaveEdit={(id, newText) => {
+                      handleEditMessage(id, newText);
+                      setEditingMessageId(null);
+                    }}
+                    onCancelEdit={() => setEditingMessageId(null)}
+                  />
+                </motion.div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* 🧠 Fixed Input Bar */}
+        <motion.div
+          animate={{
+            opacity: isScrolledUp ? 0.98 : 1,
+            y: isScrolledUp ? -2 : 0,
+          }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+          className="fixed bottom-0 left-0 right-0 z-40 bg-transparent"
+        >
+          <div className="mx-auto w-full max-w-3xl px-3 sm:px-4 md:px-6 lg:px-0 py-4 translate-x-[30px]">
+            <ChatInput
+              input={input}
+              setInput={setInput}
+              isLoading={isLoading}
+              isRegenerating={isRegenerating}
+              isChatEmpty={isChatEmpty}
+              handleSubmit={handleSubmit}
+              onFileSelect={(files) =>
+                handleFileChange({ target: { files } } as any)
+              }
+              onQuickAction={(action) => console.log("Quick action:", action)}
+              ariaLabel="Message input"
+              className="w-full"
+            />
+          </div>
+        </motion.div>
+      </>
+    )}
   </motion.div>
 )}
+
+
 
       </main>
       <style jsx global>{`

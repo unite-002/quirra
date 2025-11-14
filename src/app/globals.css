@@ -142,3 +142,53 @@ body {
   vertical-align: bottom;
   width: 1.5ch;
 }
+
+/* ===================================== */
+/* 💡 ChatGPT-Style Message Highlight */
+/* ===================================== */
+
+@keyframes flashHighlight {
+  0% {
+    background-color: rgba(0, 224, 255, 0.25);
+    box-shadow: 0 0 10px rgba(0, 224, 255, 0.2);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+.flash-highlight {
+  animation: flashHighlight 1.2s ease-out;
+}
+
+/* ===================================== */
+/* 🌟 Fade-In Animation */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-in-out;
+}
+
+/* ===================================== */
+/* 💤 Blink Animation *
+/* Accessibility modes */
+.high-contrast-mode {
+  background-color: #000 !important;
+  color: #fff !important;
+}
+
+.focus-highlight-mode *:focus {
+  outline: 2px solid #3b82f6 !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+  transition: outline 0.1s ease;
+}
+
+/* Use CSS variable for reduced motion */
+* {
+  transition-duration: var(--motion-duration, 200ms) !important;
+}

@@ -1,6 +1,8 @@
 "use client";
 import { motion, useAnimation } from "framer-motion";
 import { useEffect } from "react";
+import QuirraLogo from "@/components/QuirraLogo";
+
 
 export default function QuirraSidebarBackground({ isActive = true }: { isActive?: boolean }) {
   const controls = useAnimation();
@@ -55,4 +57,4 @@ export default function QuirraSidebarBackground({ isActive = true }: { isActive?
       <div className="absolute inset-0 bg-[#0A0C18]/30 backdrop-blur-[2px] border border-[#1A1F2C]/40 rounded-2xl shadow-[0_0_25px_rgba(0,80,255,0.1)]" />
     </div>
   );
-}
+}  

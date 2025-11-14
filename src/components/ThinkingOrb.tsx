@@ -10,39 +10,79 @@ interface ThinkingOrbProps {
 export const ThinkingOrb: React.FC<ThinkingOrbProps> = ({ isThinking, size = 36 }) => {
   return (
     <motion.div
-      className="relative"
+      className="relative flex items-center justify-center"
       style={{ width: size, height: size }}
       animate={{
-        scale: isThinking ? [1, 1.06, 1] : 1,
-        opacity: isThinking ? [0.9, 1, 0.9] : 1,
+        scale: isThinking ? [1, 1.08, 1] : 1,
+        rotate: isThinking ? [0, 360] : 0,
       }}
       transition={{
-        duration: 2,
+        duration: 8,
         repeat: Infinity,
-        ease: "easeInOut",
+        ease: "linear",
       }}
     >
-      {/* Outer glow */}
-      <div className="absolute inset-0 rounded-full blur-xl bg-gradient-to-r from-blue-400/30 via-indigo-500/30 to-sky-400/30 animate-pulse" />
-
-      {/* Inner core */}
+      {/* 🌠 Ambient glow (soft outer light) */}
       <motion.div
-        className="absolute inset-[20%] rounded-full bg-gradient-to-br from-blue-300/80 via-sky-300/70 to-indigo-400/60 shadow-[0_0_20px_rgba(56,189,248,0.5)]"
+        className="absolute inset-0 rounded-full blur-2xl"
+        style={{
+          background:
+            "radial-gradient(circle at 30% 30%, rgba(99,102,241,0.3), rgba(56,189,248,0.15))",
+        }}
         animate={{
-          background: isThinking
-            ? [
-                "radial-gradient(circle at 30% 30%, rgba(96,165,250,0.9), rgba(37,99,235,0.5), rgba(17,24,39,0.1))",
-                "radial-gradient(circle at 70% 70%, rgba(125,211,252,0.9), rgba(56,189,248,0.6), rgba(17,24,39,0.1))",
-              ]
-            : [
-                "radial-gradient(circle at 50% 50%, rgba(96,165,250,0.8), rgba(17,24,39,0.2))",
-              ],
+          opacity: isThinking ? [0.4, 0.8, 0.4] : 0.3,
+          scale: isThinking ? [1, 1.1, 1] : 1,
         }}
         transition={{
-          duration: 4,
+          duration: 2.6,
           repeat: Infinity,
-          repeatType: "mirror",
           ease: "easeInOut",
+        }}
+      />
+
+      {/* 💫 Orbiting light ring */}
+      <motion.div
+        className="absolute inset-0 rounded-full border border-blue-400/20"
+        animate={{
+          rotate: isThinking ? 360 : 0,
+        }}
+        transition={{
+          duration: 10,
+          repeat: Infinity,
+          ease: "linear",
+        }}
+      >
+        <div className="absolute top-0 left-1/2 w-[6px] h-[6px] rounded-full bg-blue-400 shadow-[0_0_10px_rgba(56,189,248,0.7)]" />
+      </motion.div>
+
+      {/* 🌌 Core pulse */}
+      <motion.div
+        className="absolute inset-[25%] rounded-full bg-gradient-to-br from-blue-300 via-indigo-400 to-sky-500 shadow-[0_0_30px_rgba(99,102,241,0.6)]"
+        animate={{
+          scale: isThinking ? [1, 1.15, 1] : 1,
+          opacity: isThinking ? [0.8, 1, 0.8] : 0.9,
+        }}
+        transition={{
+          duration: 2.4,
+          repeat: Infinity,
+          ease: "easeInOut",
+        }}
+      />
+
+      {/* 🌈 Dynamic gradient shimmer */}
+      <motion.div
+        className="absolute inset-[30%] rounded-full mix-blend-screen blur-sm"
+        style={{
+          background:
+            "conic-gradient(from 0deg, rgba(147,197,253,0.8), rgba(167,139,250,0.8), rgba(56,189,248,0.8), rgba(147,197,253,0.8))",
+        }}
+        animate={{
+          rotate: isThinking ? [0, 360] : 0,
+        }}
+        transition={{
+          duration: 6,
+          repeat: Infinity,
+          ease: "linear",
         }}
       />
     </motion.div>

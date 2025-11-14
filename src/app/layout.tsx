@@ -2,6 +2,7 @@
 
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import { SettingsProvider } from '@/components/Settings/useSettings' // ✅ added import
 
 // App Metadata
 export const metadata: Metadata = {
@@ -26,7 +27,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-black text-white antialiased font-sans">
-        {children}
+        {/* ✅ Wrapped your entire app inside SettingsProvider */}
+        <SettingsProvider>
+          {children}
+        </SettingsProvider>
       </body>
     </html>
   )

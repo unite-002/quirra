@@ -10,15 +10,156 @@ import util from 'util';
 import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
 
+/* ---------------------------
+   callModel - OpenRouter-only wrapper
+   Insert this right after imports (before other top-level functions/constants)
+--------------------------- */
+
+async function callModel({
+  messages,
+  model,
+  temperature = 0.7,
+  max_tokens = 800,
+  timeoutMs = 120000,
+  maxAttempts = 3,
+}: {
+  messages: { role: "system" | "user" | "assistant"; content: string }[];
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
+}): Promise<string> {
+  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not set in env.");
+  }
+
+  const OPENROUTER_API_URL =
+    process.env.OPENROUTER_API_URL ||
+    "https://openrouter.ai/api/v1/chat/completions";
+
+  const OPENROUTER_MODEL = model || process.env.OPENROUTER_MODEL || "gpt-4o-mini";
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt++;
+    try {
+      const payload: any = {
+        model: OPENROUTER_MODEL,
+        messages,
+        temperature,
+        max_tokens,
+      };
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      const res = await fetch(OPENROUTER_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        if (res.status === 429 || res.status >= 500) {
+          // transient
+          throw new Error(`transient:${res.status}:${text || res.statusText}`);
+        } else {
+          // permanent
+          throw new Error(`permanent:${res.status}:${text || res.statusText}`);
+        }
+      }
+
+      const data = await res.json().catch(() => null);
+      const content =
+        data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? null;
+
+      if (!content) {
+        throw new Error("empty_response: OpenRouter returned no content");
+      }
+
+      return String(content).trim();
+    } catch (err: any) {
+      const msg = String(err?.message || err || "");
+      const isAbort = /abort|timeout/i.test(msg);
+      const isTransient = /transient|timeout|ECONNRESET|ETIMEDOUT|429|5\d{2}/i.test(
+        msg
+      );
+
+      if (attempt < maxAttempts && (isTransient || isAbort)) {
+        const backoff = 200 * Math.pow(2, attempt); // 400ms, 800ms, 1600ms ...
+        console.warn(
+          `[callModel] attempt ${attempt} failed (transient). backing off ${backoff}ms. err=${msg}`
+        );
+        await sleep(backoff);
+        continue;
+      }
+
+      console.error("[callModel] final failure:", msg);
+      throw new Error(msg.replace(/^transient:|^permanent:/, ""));
+    }
+  }
+
+  throw new Error("callModel: exhausted retries");
+}
+
+// --- Quick Command Prompt Templates ---
+const COMMAND_PROMPT_MAP: Record<string, (input: string) => string> = {
+  idea: (input) =>
+    `You are Quirra, an imaginative creative assistant. Generate original, high-quality ideas based on the user's request.\n\nUser Request: ${input}\n\nOutput: A list of unique, well-explained ideas with short justifications.`,
+  design: (input) =>
+    `You are Quirra, a skilled UX/UI concept generator and creative designer. Turn the user's prompt into a structured creative concept or design idea.\n\nUser Request: ${input}\n\nOutput: Describe layout, colors, features, and feeling.`,
+  study: (input) =>
+    `You are Quirra, an expert teacher. Turn the user's question into a concise, easy-to-understand explanation or a short study guide.\n\nQuestion: ${input}\n\nOutput: Summarize clearly and provide helpful examples.`,
+  task: (input) =>
+    `You are Quirra, an efficient productivity planner. Turn the user's input into a prioritized task list with brief explanations.\n\nUser Input: ${input}\n\nOutput: A clear action plan.`,
+  upload: (input) =>
+    `You are Quirra, an analytical assistant that can describe and interpret uploaded content. The user uploaded a file. Based on their message, explain what could be done with the file.\n\nContext: ${input}`
+};
+
+
 // Promisify the file parsing function for async/await usage
 const readFileAsync = util.promisify(fs.readFile);
 const renameAsync = util.promisify(fs.rename);
 
-// Define the shape of a message for clarity
+// 🧩 Enhanced message structure (supports images, files, etc.)
 interface ChatMessage {
+  id?: string; // optional if you generate IDs elsewhere
   role: 'system' | 'user' | 'assistant';
   content: string;
+
+  // Optional extended fields for multimodal or structured messages
+  type?: 'text' | 'image' | 'file';
+  imageUrl?: string;
+  fileUrl?: string;
+  fileName?: string;
+  mimeType?: string;
+  created_at?: string;
 }
+
+// 🧩 Enhanced message structure (supports images, files, etc.)
+interface ChatMessage {
+  id?: string;
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  type?: 'text' | 'image' | 'file';
+  imageUrl?: string;
+  fileUrl?: string;
+  fileName?: string;
+  mimeType?: string;
+  created_at?: string;
+}
+
 
 // Define the shape of personality profile for type safety
 interface PersonalityProfile {
@@ -792,8 +933,12 @@ function evaluateAndFuseResponses(
   // Sort responses by a simple quality score (e.g., relevance, length, latency)
   const sortedResponses = responses.sort((a, b) => {
     // Simple relevance check: Does the response contain keywords from the prompt?
-    const aRelevance = userAnalysisResult.topic_keywords.filter(keyword => a.content.toLowerCase().includes(keyword.toLowerCase())).length;
-    const bRelevance = userAnalysisResult.topic_keywords.filter(keyword => b.content.toLowerCase().includes(keyword.toLowerCase())).length;
+    const aRelevance = userAnalysisResult.topic_keywords.filter(keyword =>
+      a.content.toLowerCase().includes(keyword.toLowerCase())
+    ).length;
+    const bRelevance = userAnalysisResult.topic_keywords.filter(keyword =>
+      b.content.toLowerCase().includes(keyword.toLowerCase())
+    ).length;
 
     // Favor more relevant responses
     if (aRelevance !== bRelevance) {
@@ -801,12 +946,19 @@ function evaluateAndFuseResponses(
     }
 
     // Favor longer, more detailed responses for complex intents
-    if (userAnalysisResult.intent === 'complex_reasoning' || userAnalysisResult.intent === 'summarization') {
+    if (
+      userAnalysisResult.intent === 'complex_reasoning' ||
+      userAnalysisResult.intent === 'summarization'
+    ) {
       return b.content.length - a.content.length;
     }
-    
+
     // For quick tasks, favor faster responses
-    if (userAnalysisResult.intent === 'hello' || userAnalysisResult.intent === 'greeting' || userAnalysisResult.intent === 'simple_question') {
+    if (
+      userAnalysisResult.intent === 'hello' ||
+      userAnalysisResult.intent === 'greeting' ||
+      userAnalysisResult.intent === 'simple_question'
+    ) {
       return a.latency - b.latency;
     }
 
@@ -816,7 +968,9 @@ function evaluateAndFuseResponses(
 
   // Take the best response's content
   const bestResponse = sortedResponses[0];
-  console.log(`✅ Selected best response from model: ${bestResponse.modelName} (Latency: ${bestResponse.latency.toFixed(2)}ms)`);
+  console.log(
+    `✅ Selected best response from model: ${bestResponse.modelName} (Latency: ${bestResponse.latency.toFixed(2)}ms)`
+  );
   return bestResponse.content;
 }
 
@@ -841,10 +995,18 @@ export async function POST(req: Request) {
       file = formData.get('file') as File | null;
       reset = formData.get('reset') === 'true';
       userName = formData.get('userName')?.toString();
-      clientPersonalityProfile = formData.get('personalityProfile') ? JSON.parse(formData.get('personalityProfile')?.toString() || '{}') : null;
+      clientPersonalityProfile = formData.get('personalityProfile')
+        ? JSON.parse(formData.get('personalityProfile')?.toString() || '{}')
+        : null;
       chatSessionId = formData.get('chatSessionId')?.toString();
-      messages = formData.get('messages') ? JSON.parse(formData.get('messages')?.toString() || '[]') : [];
+      messages = formData.get('messages')
+        ? JSON.parse(formData.get('messages')?.toString() || '[]')
+        : [];
       isRegenerating = formData.get('isRegenerating') === 'true';
+
+      // ✅ NEW refinedPrompt handling
+      const refined = formData.get('refinedPrompt')?.toString()?.trim() || '';
+      prompt = refined.length > 0 ? refined : prompt;
     } else if (contentType?.includes('application/json')) {
       const jsonBody = await req.json();
       prompt = jsonBody.prompt;
@@ -855,32 +1017,52 @@ export async function POST(req: Request) {
       messages = jsonBody.messages;
       isRegenerating = jsonBody.isRegenerating;
       file = null; // No file in JSON body
+
+      // ✅ NEW refinedPrompt handling
+      const refined = jsonBody.refinedPrompt?.trim() || '';
+      prompt = refined.length > 0 ? refined : prompt;
     } else {
       console.error(`❌ Unsupported Content-Type: ${contentType}`);
-      return NextResponse.json({ content: '❌ Unsupported Content-Type' }, { status: 415 });
+      return NextResponse.json(
+        { content: '❌ Unsupported Content-Type' },
+        { status: 415 }
+      );
     }
   } catch (error) {
     console.error('❌ Error parsing request body:', error);
-    return NextResponse.json({ content: '❌ Invalid request body' }, { status: 400 });
+    return NextResponse.json(
+      { content: '❌ Invalid request body' },
+      { status: 400 }
+    );
   }
+
+  console.log('🧠 Final prompt used:', prompt);
 
   let uploadedFileContent = '';
 
   // 2. File Validation and 3. Read File Content
-  if (file && file.name && file.size > 0) { // Check if a file was actually uploaded
+  if (file && file.name && file.size > 0) {
     console.log(`📁 File uploaded: ${file.name}, Size: ${file.size} bytes`);
-    
+
     // File Size Limit
     if (file.size > MAX_FILE_SIZE) {
-      console.error(`❌ File too large: ${file.size} bytes. Max size is ${MAX_FILE_SIZE} bytes.`);
-      return NextResponse.json({ content: '❌ The uploaded file is too large. Please upload a file smaller than 10MB.' }, { status: 413 });
+      console.error(
+        `❌ File too large: ${file.size} bytes. Max size is ${MAX_FILE_SIZE} bytes.`
+      );
+      return NextResponse.json(
+        {
+          content:
+            '❌ The uploaded file is too large. Please upload a file smaller than 10MB.',
+        },
+        { status: 413 }
+      );
     }
-    
+
     const fileExtension = path.extname(file.name).toLowerCase();
-    
+
     try {
       const fileBuffer = Buffer.from(await file.arrayBuffer());
-      
+
       if (fileExtension === '.txt') {
         uploadedFileContent = fileBuffer.toString('utf8');
       } else if (fileExtension === '.pdf') {
@@ -891,18 +1073,58 @@ export async function POST(req: Request) {
         uploadedFileContent = data.value;
       } else {
         console.warn(`⚠️ Unsupported file type: ${fileExtension}`);
-        return NextResponse.json({ content: '⚠️ Unsupported file type. Please upload a .txt, .pdf, or .docx file.' }, { status: 400 });
+        return NextResponse.json(
+          {
+            content:
+              '⚠️ Unsupported file type. Please upload a .txt, .pdf, or .docx file.',
+          },
+          { status: 400 }
+        );
       }
+
+
+      // Limit extremely large file text to prevent token overflow
+const MAX_EXTRACTED_CHARS = 8000; // roughly ~2000 tokens
+if (uploadedFileContent.length > MAX_EXTRACTED_CHARS) {
+  console.log(`⚠️ Truncating long file content (${uploadedFileContent.length} chars).`);
+  uploadedFileContent = uploadedFileContent.slice(0, MAX_EXTRACTED_CHARS) + "\n...[truncated]";
+}
+
+// Optional: Add a quick auto-summary to help the model
+const summaryPrompt = `
+You are Quirra, summarize the following text in under 5 bullet points:
+${uploadedFileContent.slice(0, 3000)}
+`;
+
+try {
+  const summaryResponse = await callModel({
+    messages: [{ role: "user", content: summaryPrompt }],
+    model: "gpt-4o-mini", // or one of your existing models
+    temperature: 0.3,
+    max_tokens: 300,
+  });
+  uploadedFileContent = `Summary of File:\n${summaryResponse}\n\nFull Extracted Text:\n${uploadedFileContent}`;
+  console.log("✅ File summarized successfully before passing to main prompt.");
+} catch (err) {
+  console.warn("⚠️ Could not auto-summarize file. Continuing with raw text.");
+}
+
+
       // 4. Combine File Content with User Prompt
       prompt = `[File Content]\n${uploadedFileContent}\n\n[User Prompt]\n${prompt}`;
-      console.log('✅ File content successfully extracted and combined with prompt.');
+      console.log('✅ File content successfully extracted and combined.');
     } catch (err) {
-      // 6. Handle File Parsing Failures
       console.error('❌ Error parsing file:', err);
-      return NextResponse.json({ content: '❌ Failed to process the uploaded file. Please ensure it is not corrupted and try again.' }, { status: 500 });
+      return NextResponse.json(
+        {
+          content:
+            '❌ Failed to process the uploaded file. Please ensure it is not corrupted and try again.',
+        },
+        { status: 500 }
+      );
     }
   }
-  
+
   // 7. Data Security & Privacy Considerations (Commented reminder)
   /*
     * This is a reminder for a production environment.
@@ -1013,157 +1235,255 @@ export async function POST(req: Request) {
       return NextResponse.json({ content: '⚠️ Please enter a message to chat with Quirra.' }, { status: 400 });
     }
 
-    // 1. Receive User Input & 2. Intent Classification + Confidence Scoring
-    console.log('🧠 Analyzing user message...');
-    const userAnalysisResult: MessageAnalysis & { confidence?: number } = await analyzeMessage(prompt);
-    console.log('✅ User message analysis complete:', userAnalysisResult);
+  // --- Step: Apply Quick Command Transformation (Idea, Design, Study, etc.) ---
+let refinedPrompt = prompt;
+let commandType: string | undefined;
 
-    if (userAnalysisResult.confidence && userAnalysisResult.confidence < 0.7) {
-      return NextResponse.json({ content: "I'm not quite sure I understand. Could you please clarify what you mean? For example, are you asking for information, a solution, or something else?" }, { status: 200 });
-    }
+try {
+  // Try to extract commandType from body if the frontend sends it
+  if (contentType?.includes('multipart/form-data')) {
+    const formData = await req.formData();
+    commandType = formData.get('commandType')?.toString();
+  } else if (contentType?.includes('application/json')) {
+    // The body was already parsed earlier, so we just reuse it if available
+    commandType = (typeof (req as any).body === 'object' && (req as any).body.commandType)
+      ? (req as any).body.commandType
+      : undefined;
+  }
+
+  if (commandType && COMMAND_PROMPT_MAP[commandType]) {
+    refinedPrompt = COMMAND_PROMPT_MAP[commandType](prompt || '');
+    console.log(`🎯 Quick Command Applied: ${commandType}`);
+  }
+} catch (err) {
+  console.warn('⚠️ Failed to extract commandType from request:', err);
+}
 
 
-    const { data: historyData, error: fetchHistoryError } = await supabase.from('messages').select('role, content').eq('user_id', userId).eq('chat_session_id', chatSessionId).order('created_at', { ascending: true }).limit(12);
-    if (fetchHistoryError) {
-      console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
-    }
+// 1. Receive User Input & 2. Intent Classification + Confidence Scoring
+console.log('🧠 Analyzing user message...');
+const userAnalysisResult: MessageAnalysis & { confidence?: number } = await analyzeMessage(refinedPrompt);
+console.log('✅ User message analysis complete:', userAnalysisResult);
 
-    let memoryContext = '';
-    let emotionalTrendSummary: string | null = null;
-    const { data: generalMemoryData, error: fetchGeneralMemoryError } = await supabase.from('memory').select('content, key').eq('user_id', userId).order('timestamp', { ascending: false }).limit(5);
+if (userAnalysisResult.confidence && userAnalysisResult.confidence < 0.7) {
+  return NextResponse.json({
+    content:
+      "I'm not quite sure I understand. Could you please clarify what you mean? For example, are you asking for information, a solution, or something else?"
+  }, { status: 200 });
+}
 
-    if (fetchGeneralMemoryError) {
-      console.error('❌ Supabase Error: Failed to fetch general user memory:', fetchGeneralMemoryError.message);
-    } else if (generalMemoryData && generalMemoryData.length > 0) {
-      memoryContext = generalMemoryData.map((m: { content: string }) => m.content).join('; ') || '';
-      const foundSummary = generalMemoryData.find((m: { key: string }) => m.key === 'emotional_trend_summary');
-      if (foundSummary) {
-        emotionalTrendSummary = foundSummary.content;
-      }
-    }
+const { data: historyData, error: fetchHistoryError } = await supabase
+  .from('messages')
+  .select('role, content')
+  .eq('user_id', userId)
+  .eq('chat_session_id', chatSessionId)
+  .order('created_at', { ascending: true })
+  .limit(12);
+if (fetchHistoryError) {
+  console.error('❌ Supabase Error: Failed to fetch message history:', fetchHistoryError.message);
+}
 
-    let dailyFocus: DailyFocus | null = null;
-    const { data: focusData, error: fetchFocusError } = await supabase.from('daily_focus').select('focus_text, created_at').eq('user_id', userId).eq('date', today).single();
-    if (fetchFocusError && fetchFocusError.code !== 'PGRST116') {
-      console.error('❌ Supabase Error: Failed to fetch daily focus:', fetchFocusError.message);
-    } else if (focusData) {
-      dailyFocus = focusData;
-    }
+let memoryContext = '';
+let emotionalTrendSummary: string | null = null;
+const { data: generalMemoryData, error: fetchGeneralMemoryError } = await supabase
+  .from('memory')
+  .select('content, key')
+  .eq('user_id', userId)
+  .order('timestamp', { ascending: false })
+  .limit(5);
 
-    let recentMoodLogs: MoodLog[] = [];
-    const { data: moodLogsData, error: fetchMoodLogsError } = await supabase.from('mood_logs').select('mood_label, sentiment_score, timestamp').eq('user_id', userId).order('timestamp', { ascending: false }).limit(3);
-    if (fetchMoodLogsError) {
-      console.error('❌ Supabase Error: Failed to fetch mood logs:', fetchMoodLogsError.message);
-    } else if (moodLogsData) {
-      recentMoodLogs = moodLogsData;
-    }
+if (fetchGeneralMemoryError) {
+  console.error('❌ Supabase Error: Failed to fetch general user memory:', fetchGeneralMemoryError.message);
+} else if (generalMemoryData && generalMemoryData.length > 0) {
+  memoryContext = generalMemoryData.map((m: { content: string }) => m.content).join('; ') || '';
+  const foundSummary = generalMemoryData.find((m: { key: string }) => m.key === 'emotional_trend_summary');
+  if (foundSummary) {
+    emotionalTrendSummary = foundSummary.content;
+  }
+}
 
-    let activeGoals: UserGoal[] = [];
-    const { data: goalsData, error: fetchGoalsError } = await supabase.from('user_goals').select('*').eq('user_id', userId).eq('status', 'active').order('created_at', { ascending: true });
-    if (fetchGoalsError) {
-      console.error('❌ Supabase Error: Failed to fetch active goals:', fetchGoalsError.message);
-    } else if (goalsData) {
-      activeGoals = goalsData as UserGoal[];
-    }
+let dailyFocus: DailyFocus | null = null;
+const { data: focusData, error: fetchFocusError } = await supabase
+  .from('daily_focus')
+  .select('focus_text, created_at')
+  .eq('user_id', userId)
+  .eq('date', today)
+  .single();
+if (fetchFocusError && fetchFocusError.code !== 'PGRST116') {
+  console.error('❌ Supabase Error: Failed to fetch daily focus:', fetchFocusError.message);
+} else if (focusData) {
+  dailyFocus = focusData;
+}
 
-    let userPersonalityProfile: PersonalityProfile | null = clientPersonalityProfile;
-    if (!userPersonalityProfile) {
-        const { data: profileData, error: fetchProfileError } = await supabase.from('profiles').select('personality_profile').eq('id', userId).single();
-        if (fetchProfileError && fetchProfileError.code !== 'PGRST116') {
-            console.error('❌ Supabase Error: Failed to fetch user personality profile:', fetchProfileError.message);
-        } else if (profileData?.personality_profile) {
-            userPersonalityProfile = profileData.personality_profile as PersonalityProfile;
+let recentMoodLogs: MoodLog[] = [];
+const { data: moodLogsData, error: fetchMoodLogsError } = await supabase
+  .from('mood_logs')
+  .select('mood_label, sentiment_score, timestamp')
+  .eq('user_id', userId)
+  .order('timestamp', { ascending: false })
+  .limit(3);
+if (fetchMoodLogsError) {
+  console.error('❌ Supabase Error: Failed to fetch mood logs:', fetchMoodLogsError.message);
+} else if (moodLogsData) {
+  recentMoodLogs = moodLogsData;
+}
+
+let activeGoals: UserGoal[] = [];
+const { data: goalsData, error: fetchGoalsError } = await supabase
+  .from('user_goals')
+  .select('*')
+  .eq('user_id', userId)
+  .eq('status', 'active')
+  .order('created_at', { ascending: true });
+if (fetchGoalsError) {
+  console.error('❌ Supabase Error: Failed to fetch active goals:', fetchGoalsError.message);
+} else if (goalsData) {
+  activeGoals = goalsData as UserGoal[];
+}
+
+let userPersonalityProfile: PersonalityProfile | null = clientPersonalityProfile;
+if (!userPersonalityProfile) {
+  const { data: profileData, error: fetchProfileError } = await supabase
+    .from('profiles')
+    .select('personality_profile')
+    .eq('id', userId)
+    .single();
+  if (fetchProfileError && fetchProfileError.code !== 'PGRST116') {
+    console.error('❌ Supabase Error: Failed to fetch user personality profile:', fetchProfileError.message);
+  } else if (profileData?.personality_profile) {
+    userPersonalityProfile = profileData.personality_profile as PersonalityProfile;
+  }
+}
+
+const { data: currentProfileData, error: fetchCurrentProfileError } = await supabase
+  .from('profiles')
+  .select('last_proactive_checkin_at')
+  .eq('id', userId)
+  .single();
+let initialProactiveMessage: string | null = null;
+
+if (currentProfileData !== null && !fetchCurrentProfileError) {
+  const lastCheckinAt = currentProfileData?.last_proactive_checkin_at ? new Date(currentProfileData.last_proactive_checkin_at) : null;
+  const now = new Date();
+  const hoursSinceLastCheckin = lastCheckinAt ? (now.getTime() - lastCheckinAt.getTime()) / (1000 * 60 * 60) : Infinity;
+
+  if (hoursSinceLastCheckin >= PROACTIVE_CHECKIN_INTERVAL_HOURS && emotionalTrendSummary) {
+    console.log(`🧠 Proactive check-in due for user ${userId}. Generating message...`);
+    try {
+      const proactiveModel = MODELS['Gemini 2.0 Flash Experimental'].name;
+      const proactiveMessages: ChatMessage[] = [
+        {
+          role: 'system',
+          content: `You are Quirra, an empathetic AI assistant. Based on the user's recent emotional trends, craft a very short (1-2 sentences), gentle, and supportive proactive check-in message. It should acknowledge their emotional state and offer general support or suggest checking in with a tool (like Daily Focus, Mood Logger, or Goal Setting). Do NOT ask direct questions that demand an immediate answer. Do NOT mention "emotional trends" directly. Just a warm, subtle check-in.`
+        },
+        {
+          role: 'user',
+          content: `Based on this emotional trend summary: "${emotionalTrendSummary}", generate a proactive check-in message for the user.`
         }
-    }
+      ];
 
-    const { data: currentProfileData, error: fetchCurrentProfileError } = await supabase.from('profiles').select('last_proactive_checkin_at').eq('id', userId).single();
-    let initialProactiveMessage: string | null = null;
-    if (currentProfileData !== null && !fetchCurrentProfileError) {
-      const lastCheckinAt = currentProfileData?.last_proactive_checkin_at ? new Date(currentProfileData.last_proactive_checkin_at) : null;
-      const now = new Date();
-      const hoursSinceLastCheckin = lastCheckinAt ? (now.getTime() - lastCheckinAt.getTime()) / (1000 * 60 * 60) : Infinity;
+      const proactiveContent = await callModel({
+        messages: proactiveMessages,
+        model: proactiveModel,
+        temperature: 0.7,
+        max_tokens: 120
+      }).catch((e) => {
+        console.warn('⚠️ Proactive callModel failed:', e?.message || e);
+        return null;
+      });
 
-      if (hoursSinceLastCheckin >= PROACTIVE_CHECKIN_INTERVAL_HOURS && emotionalTrendSummary) {
-        console.log(`🧠 Proactive check-in due for user ${userId}. Generating message...`);
-        try {
-          const proactiveModel = MODELS['Gemini 2.0 Flash Experimental'].name;
-          const proactiveRes = await fetch(OPENROUTER_API_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-              'HTTP-Referer': 'YOUR_SITE_URL_HERE',
-              'X-Title': 'Your Chatbot Prototype',
-            },
-            body: JSON.stringify({
-              model: proactiveModel,
-              messages: [
-                {
-                  role: "system",
-                  content: `You are Quirra, an empathetic AI assistant. Based on the user's recent emotional trends, craft a very short (1-2 sentences), gentle, and supportive proactive check-in message. It should acknowledge their emotional state and offer general support or suggest checking in with a tool (like Daily Focus, Mood Logger, or Goal Setting). Do NOT ask direct questions that demand an immediate answer. Do NOT mention "emotional trends" directly. Just a warm, subtle check-in.
-                  Example 1 (negative trend): "I've been thinking about you. Remember, I'm here to support you through any challenges you might be facing."
-                  Example 2 (mixed/stressed trend): "Just checking in. If you need a moment to reflect or plan, I'm here to help."
-                  Example 3 (no strong trend/general): "Hope you're having a good day! I'm here if you need anything."
-                  Example 4 (positive trend): "It's great to see your positive energy! Keep up the amazing work."
-                  `
-                },
-                {
-                  role: "user",
-                  content: `Based on this emotional trend summary: "${emotionalTrendSummary}", generate a proactive check-in message for the user.`
-                }
-              ],
-              temperature: 0.7,
-              max_tokens: 60,
-            }),
-            signal: AbortSignal.timeout(5000)
-          });
-          if (proactiveRes.ok) {
-            const proactiveData = await proactiveRes.json();
-            initialProactiveMessage = proactiveData.choices?.[0]?.message?.content?.trim() || null;
-            if (initialProactiveMessage) {
-              console.log(`✅ Generated proactive message: "${initialProactiveMessage}"`);
-              const { error: updateCheckinError } = await supabase
-                .from('profiles')
-                .update({ last_proactive_checkin_at: now.toISOString() })
-                .eq('id', userId);
-              if (updateCheckinError) {
-                console.error('❌ Supabase Error: Failed to update last_proactive_checkin_at:', updateCheckinError.message);
-              }
-            }
-          } else {
-            console.error('❌ Error generating proactive message:', await proactiveRes.text());
+      if (proactiveContent) {
+        initialProactiveMessage = String(proactiveContent).trim();
+        if (initialProactiveMessage) {
+          console.log(`✅ Generated proactive message: "${initialProactiveMessage}"`);
+          const { error: updateCheckinError } = await supabase
+            .from('profiles')
+            .update({ last_proactive_checkin_at: now.toISOString() })
+            .eq('id', userId);
+          if (updateCheckinError) {
+            console.error('❌ Supabase Error: Failed to update last_proactive_checkin_at:', updateCheckinError.message);
           }
-        } catch (proactiveError: any) {
-          console.error('❌ Error generating proactive message:', proactiveError.message);
         }
+      } else {
+        console.warn('⚠️ Proactive message generation returned no content.');
       }
+    } catch (proactiveError: any) {
+      console.error('❌ Error generating proactive message:', proactiveError.message || proactiveError);
     }
+  }
+}
 
-    const conversationHistoryForLLM: ChatMessage[] = messages.map((msg: any) => ({
-        role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
-        content: msg.content,
-    }));
+// 3️⃣ Image Generation (if user requested image creation)
+if (userAnalysisResult.intent === "image_generation" || refinedPrompt.toLowerCase().includes("generate image")) {
+  console.log("🎨 Detected image generation intent");
 
-    if (isRegenerating && conversationHistoryForLLM[conversationHistoryForLLM.length - 1]?.role === 'assistant') {
-        conversationHistoryForLLM.pop();
-    }
+  const imagePrompt = refinedPrompt.replace(/generate image/gi, "").trim();
+  const model = "stability/stable-diffusion-xl-base-1.0"; // via OpenRouter
 
-    const systemInstruction = getQuirraPersonalizedInstruction(
-        userPersonalityProfile,
-        userAnalysisResult,
-        userName,
-        memoryContext,
-        dailyFocus,
-        recentMoodLogs,
-        activeGoals,
-        emotionalTrendSummary
-    );
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/images/generations", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        prompt: imagePrompt || refinedPrompt,
+        size: "1024x1024",
+      }),
+    });
+
+    const data = await response.json();
+    const imageUrl = data?.data?.[0]?.url;
+
+    if (!imageUrl) throw new Error("No image URL returned.");
+
+    console.log("✅ Image generated successfully:", imageUrl);
+
+    return NextResponse.json({
+      type: "image",
+      content: `Here’s your generated image for: "${imagePrompt}"`,
+      imageUrl,
+    });
+  } catch (err: any) {
+    console.error("❌ Image generation failed:", err.message);
+    return NextResponse.json({
+      content: "Sorry, I couldn’t generate the image right now. Please try again later.",
+      error: err.message,
+    }, { status: 500 });
+  }
+}
+
+
+const conversationHistoryForLLM: ChatMessage[] = Array.isArray(messages)
+  ? messages.map((msg: any) => ({
+      role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
+      content: msg.content,
+    }))
+  : [];
+
+if (isRegenerating && conversationHistoryForLLM[conversationHistoryForLLM.length - 1]?.role === 'assistant') {
+  conversationHistoryForLLM.pop();
+}
+
+const systemInstruction = getQuirraPersonalizedInstruction(
+  userPersonalityProfile,
+  userAnalysisResult,
+  userName,
+  memoryContext,
+  dailyFocus,
+  recentMoodLogs,
+  activeGoals,
+  emotionalTrendSummary
+);
+
     
     // 5. Send Combined Prompt to the LLM Model
     let messagesForLLM = [
       { role: 'system' as const, content: systemInstruction },
       ...conversationHistoryForLLM,
-      { role: 'user' as const, content: prompt },
+      { role: 'user' as const, content: refinedPrompt },
     ];
 
     // Log the user message and perform post-save actions
@@ -1284,12 +1604,12 @@ export async function POST(req: Request) {
     const needsLiveSearch = serperKey && (userAnalysisResult.intent === 'information_seeking' || userAnalysisResult.intent === 'question' || userAnalysisResult.topic_keywords.some((keyword: string) => ["news", "current", "latest", "update", "weather", "define", "how to", "what is"].includes(keyword.toLowerCase())) || prompt.toLowerCase().includes('search'));
 
     if (needsLiveSearch && serperKey) {
-      console.log('🔍 Performing live search with Serper for prompt:', prompt);
+      console.log('🔍 Performing live search with Serper for prompt:', refinedPrompt);
       try {
         const searchRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-API-KEY': serperKey },
-          body: JSON.stringify({ q: prompt }),
+          body: JSON.stringify({ q: refinedPrompt }),
           signal: AbortSignal.timeout(10000)
         });
         if (searchRes.ok) {
@@ -1339,147 +1659,170 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- 3. Dispatch to All LLM Models (Parallel Model Querying) ---
-    const modelsToQuery = getRelevantModels(prompt, userAnalysisResult);
-    console.log(`🤖 Dispatching prompt to models: ${modelsToQuery.join(', ')}`);
+    // --- 3. Dispatch to All LLM Models (Sequential callModel loop + fusion + SSE) ---
+const modelsToQuery = getRelevantModels(String(refinedPrompt), userAnalysisResult);
+console.log(`🤖 Dispatching prompt to models: ${modelsToQuery.join(', ')}`);
 
-    const modelPromises = modelsToQuery.map(modelName => {
-      const startTime = performance.now();
-      return fetch(OPENROUTER_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-          'HTTP-Referer': 'YOUR_SITE_URL_HERE',
-          'X-Title': 'Your Chatbot Prototype',
-        },
-        body: JSON.stringify({
-          model: modelName,
-          messages: messagesForLLM,
-          max_tokens: 800,
-          temperature: 0.7,
-        }),
-        signal: AbortSignal.timeout(40000) // Timeout for each model call
-      })
-      .then(res => {
-        const latency = performance.now() - startTime;
-        if (!res.ok) {
-          // --- Handle Fallback Logic Here ---
-          console.error(`❌ LLM API Error for model ${modelName}: ${res.status}. Attempting fallback...`);
-          const fallbackModel = getFallbackModel(modelName);
-          if (fallbackModel) {
-            console.log(`🔄 Retrying with fallback model: ${fallbackModel}`);
-            return fetch(OPENROUTER_API_URL, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-                'HTTP-Referer': 'YOUR_SITE_URL_HERE',
-                'X-Title': 'Your Chatbot Prototype',
-              },
-              body: JSON.stringify({
-                model: fallbackModel,
-                messages: messagesForLLM,
-                max_tokens: 800,
-                temperature: 0.7,
-              }),
-              signal: AbortSignal.timeout(40000)
-            }).then(fallbackRes => {
-              if (!fallbackRes.ok) {
-                return fallbackRes.text().then(errorText => {
-                  console.error(`❌ Fallback LLM API Error for model ${fallbackModel}: ${fallbackRes.status} - ${errorText}`);
-                  return null;
-                });
-              }
-              return fallbackRes.json().then(data => {
-                return {
-                  modelName: fallbackModel,
-                  content: data.choices?.[0]?.message?.content?.trim() || '',
-                  latency: performance.now() - startTime,
-                  usage: data.usage
-                };
-              });
-            });
-          }
-          return res.text().then(errorText => {
-            console.error(`❌ LLM API Error for model ${modelName}: ${res.status} - ${errorText}`);
-            return null; // Return null for failed requests
-          });
-        }
-        return res.json().then(data => {
-          return {
-            modelName,
-            content: data.choices?.[0]?.message?.content?.trim() || '',
-            latency,
-            usage: data.usage
-          };
-        });
-      })
-      .catch(err => {
-        console.error(`❌ Fetch Error for model ${modelName}:`, err.message);
-        return null;
-      });
+// We'll call callModel for each model (sequentially to avoid hammering provider),
+// collect responses and attempt a single fallback per failed model.
+const modelResponses: Array<{ modelName: string; content: string; latency: number }> = [];
+
+for (const modelName of modelsToQuery) {
+  try {
+    const t0 = performance.now();
+    const content = await callModel({
+      messages: messagesForLLM,
+      model: modelName,
+      temperature: 0.7,
+      max_tokens: 800,
+      timeoutMs: 40000,
+      maxAttempts: 2
     });
-
-    // Await all model responses
-    const responses = (await Promise.all(modelPromises)).filter(Boolean) as Array<{ modelName: string; content: string; latency: number; usage: any }>;
-
-    if (responses.length === 0) {
-      console.error('❌ All model calls failed.');
-      return NextResponse.json({ content: '🚨 All AI models failed to generate a response. Please try again later.' }, { status: 500 });
+    const latency = performance.now() - t0;
+    modelResponses.push({ modelName, content: String(content), latency });
+    console.log(`✅ Model ${modelName} succeeded (latency ${latency.toFixed(0)}ms).`);
+  } catch (err: any) {
+    console.warn(`⚠️ Model ${modelName} failed:`, err?.message || err);
+    // Try one fallback model if available
+    const fallbackModel = getFallbackModel(modelName);
+    if (fallbackModel) {
+      try {
+        const t0 = performance.now();
+        const content = await callModel({
+          messages: messagesForLLM,
+          model: fallbackModel,
+          temperature: 0.7,
+          max_tokens: 800,
+          timeoutMs: 40000,
+          maxAttempts: 2
+        });
+        const latency = performance.now() - t0;
+        modelResponses.push({ modelName: fallbackModel, content: String(content), latency });
+        console.log(`🔁 Fallback ${fallbackModel} succeeded for ${modelName} (latency ${latency.toFixed(0)}ms).`);
+      } catch (err2: any) {
+        console.warn(`⚠️ Fallback ${fallbackModel} also failed:`, err2?.message || err2);
+      }
     }
+  }
+}
 
-    // 5. Response Evaluation & Fusion
-    const bestResponseContent = evaluateAndFuseResponses(responses, prompt, userAnalysisResult);
+// ----- Response selection, token estimation, SSE stream, DB saves -----
+if (modelResponses.length === 0) {
+  console.error('❌ All model calls failed.');
+  return NextResponse.json({
+    content: '🚨 All AI models failed to generate a response. Please try again later.'
+  }, { status: 500 });
+}
 
-    // Get total tokens used across all successful model calls
-    let totalOutputTokens = responses.reduce((acc, res) => acc + (res.usage?.completion_tokens || 0), 0);
+// Evaluate & fuse responses
+let bestResponseContent: string;
+try {
+  bestResponseContent = evaluateAndFuseResponses(modelResponses, String(prompt), userAnalysisResult);
+  if (!bestResponseContent || bestResponseContent.trim().length === 0) {
+    bestResponseContent = modelResponses[0]?.content || '';
+  }
+} catch (err) {
+  console.warn('⚠️ fusion step failed, using first model response:', err);
+  bestResponseContent = modelResponses[0]?.content || '';
+}
 
-    const encoder = new TextEncoder();
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        if (initialProactiveMessage) {
-          const proactiveMessageId = crypto.randomUUID();
-          controller.enqueue(encoder.encode(`data:${JSON.stringify({ type: 'proactive_message', id: proactiveMessageId, content: initialProactiveMessage, chatSessionId, created_at: new Date().toISOString() })}\n\n`));
+// Estimate tokens used (approximation)
+const estimateTokens = (text: string | undefined | null) => {
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+};
+
+let totalOutputTokens = modelResponses.reduce((acc, r) => acc + estimateTokens(r.content), 0);
+
+// const totalOutputTokens = estimateTokens(bestResponseContent);
+
+const encoder = new TextEncoder();
+
+const readableStream = new ReadableStream({
+  async start(controller) {
+    try {
+      // 1) Send proactive message first if present
+      if (initialProactiveMessage) {
+        const proactiveMessageId = crypto.randomUUID();
+        controller.enqueue(encoder.encode(`data:${JSON.stringify({
+          type: 'proactive_message',
+          id: proactiveMessageId,
+          content: initialProactiveMessage,
+          chatSessionId,
+          created_at: new Date().toISOString()
+        })}\n\n`));
+
+        try {
           await saveMessage(supabase, userId, chatSessionId, 'assistant', initialProactiveMessage);
+        } catch (saveErr) {
+          console.error('❌ Failed to save proactive message:', saveErr);
         }
+      }
 
-        // The response is no longer a stream, send it as one chunk
-        controller.enqueue(encoder.encode(`data:${JSON.stringify({ type: 'llm_response_chunk', content: bestResponseContent })}\n\n`));
-        controller.enqueue(encoder.encode('data:[DONE]\n\n'));
+      // 2) Send fused LLM response
+      controller.enqueue(encoder.encode(`data:${JSON.stringify({
+        type: 'llm_response_chunk',
+        content: bestResponseContent
+      })}\n\n`));
 
-        // Save the fused response to DB
-        if (bestResponseContent) {
+      // 3) End of stream
+      controller.enqueue(encoder.encode('data:[DONE]\n\n'));
+
+      // 4) Save response to DB
+      if (bestResponseContent && bestResponseContent.trim().length > 0) {
+        try {
           await saveMessage(supabase, userId, chatSessionId, 'assistant', bestResponseContent);
+        } catch (saveErr) {
+          console.error('❌ Failed to save assistant message:', saveErr);
         }
+      }
 
-        // Update daily token usage in Supabase after the main response is generated
-        const finalTokensUsed = estimatedInputTokens + totalOutputTokens;
+      // 5) Update usage
+      try {
+        const finalTokensUsed =
+          (typeof estimatedInputTokens === 'number' ? estimatedInputTokens : estimateTokens(prompt)) +
+          totalOutputTokens;
+
         const { error: updateUsageError } = await supabase
           .from('profiles')
-          .update({ daily_token_usage: currentDailyTokenUsage + finalTokensUsed, last_usage_date: today })
+          .update({
+            daily_token_usage: (currentDailyTokenUsage || 0) + finalTokensUsed,
+            last_usage_date: today
+          })
           .eq('id', userId);
 
         if (updateUsageError) {
           console.error('❌ Supabase Error: Failed to update daily token usage after response:', updateUsageError.message);
         } else {
-          console.log(`✅ User ${userId} daily token usage updated. Used ${finalTokensUsed} tokens. New total: ${currentDailyTokenUsage + finalTokensUsed}/${DAILY_TOKEN_LIMIT}`);
+          console.log(
+            `✅ User ${userId} daily token usage updated. Used ${finalTokensUsed} tokens. New total: ${(currentDailyTokenUsage || 0) + finalTokensUsed}/${DAILY_TOKEN_LIMIT}`
+          );
         }
-
-        controller.close();
-      },
-    });
-
-    return new NextResponse(readableStream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-      },
-    });
-
-  } catch (err: any) {
-    console.error('❌ Critical API Route Error:', err);
-    return NextResponse.json({ content: `🚨 An unexpected critical error occurred: ${err.message}. Please try again later.` }, { status: 500 });
+      } catch (usageErr) {
+        console.error('❌ Error updating usage in Supabase:', usageErr);
+      }
+    } catch (streamErr) {
+      console.error('❌ Error in SSE stream start:', streamErr);
+    } finally {
+      controller.close();
+    }
   }
+});
+
+// Return SSE response
+return new NextResponse(readableStream, {
+  headers: {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive'
+  }
+});
+
+// ✅ Close outer try/catch and POST function
+} catch (err: any) {
+  console.error('❌ Critical API Route Error:', err);
+  return NextResponse.json({
+    content: `🚨 An unexpected critical error occurred: ${err.message}. Please try again later.`
+  }, { status: 500 });
+}
 }
